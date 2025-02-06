@@ -1,7 +1,3 @@
-
-
-
-
 #ifndef __NG_ARP_H__
 #define __NG_ARP_H__
 
