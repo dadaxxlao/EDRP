@@ -42,6 +42,7 @@ struct ng_tcp_stream {
     struct ng_tcp_stream *next;
     pthread_cond_t cond;
     pthread_mutex_t mutex;
+    int non_blocking;
 };
 
 struct ng_tcp_table {

@@ -10,6 +10,22 @@
 #define ARP_ENTRY_STATUS_DYNAMIC 0
 #define ARP_ENTRY_STATUS_STATIC  1
 
+#define LL_ADD(item, list) do {		\
+	item->prev = NULL;				\
+	item->next = list;				\
+	if (list != NULL) list->prev = item; \
+	list = item;					\
+} while(0)
+
+
+#define LL_REMOVE(item, list) do {		\
+	if (item->prev != NULL) item->prev->next = item->next;	\
+	if (item->next != NULL) item->next->prev = item->prev;	\
+	if (list == item) list = item->next;	\
+	item->prev = item->next = NULL;			\
+} while(0)
+
+
 struct arp_entry {
     uint32_t ip;
     uint8_t hwaddr[RTE_ETHER_ADDR_LEN];
@@ -21,6 +37,21 @@ struct arp_entry {
 struct arp_table {
     struct arp_entry *entries;
     int count;
+};
+
+struct offload { //
+
+	uint32_t sip;
+	uint32_t dip;
+
+	uint16_t sport;
+	uint16_t dport; //
+
+	int protocol;
+
+	unsigned char *data;
+	uint16_t length;
+	
 };
 
 /**

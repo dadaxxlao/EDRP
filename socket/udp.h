@@ -22,6 +22,7 @@ struct localhost {
     struct localhost *next;
     pthread_cond_t cond;
     pthread_mutex_t mutex;
+    int non_blocking;
 };
 
 /**
