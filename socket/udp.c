@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <arpa/inet.h>
-struct localhost *lhost = NULL;
+
 /**
  * @brief 获取UDP接收和发送缓冲区
  */

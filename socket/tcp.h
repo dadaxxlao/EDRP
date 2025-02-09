@@ -6,6 +6,7 @@
 #include <rte_ring.h>
 #include <rte_malloc.h>
 #include <rte_tcp.h>
+#include <rte_ip4.h>
 #include <pthread.h>
 
 #define TCP_INITIAL_WINDOW 14600
@@ -45,10 +46,31 @@ struct ng_tcp_stream {
     int non_blocking;
 };
 
+struct ng_tcp_fragment { 
+
+	uint16_t sport;  
+	uint16_t dport;  
+	uint32_t seqnum;  
+	uint32_t acknum;  
+	uint8_t  hdrlen_off;  
+	uint8_t  tcp_flags; 
+	uint16_t windows;   
+	uint16_t cksum;     
+	uint16_t tcp_urp;  
+
+	int optlen;
+	uint32_t option[TCP_OPTION_LENGTH];
+
+	unsigned char *data;
+	uint32_t length;
+
+};
+
 struct ng_tcp_table {
     int count;
     struct ng_tcp_stream *tcb_set;
 };
+static struct ng_tcp_table *tcp_table = NULL;
 
 /**
  * @brief 获取TCP流管理实例

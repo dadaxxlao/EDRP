@@ -1,11 +1,14 @@
-#ifndef __NG_ARP_H__
-#define __NG_ARP_H__
+#ifndef __EDRP_ARP_H__
+#define __EDRP_ARP_H__
 
 #include <rte_ether.h>
 #include <rte_malloc.h>
 #include <rte_ring.h>
 #include <rte_memcpy.h>
 #include <rte_memzone.h>
+#include <rte_arp.h>
+
+#include "socket.h"
 
 #define ARP_ENTRY_STATUS_DYNAMIC 0
 #define ARP_ENTRY_STATUS_STATIC  1

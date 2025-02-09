@@ -5,7 +5,7 @@
 #include <rte_mbuf.h>
 #include <rte_ring.h>
 #include <rte_malloc.h>
-#include <rte_ipv4.h>
+#include <rte_ip4.h>
 #include <rte_udp.h>
 
 #define UDP_APP_RECV_BUFFER_SIZE 128
@@ -24,7 +24,7 @@ struct localhost {
     pthread_mutex_t mutex;
     int non_blocking;
 };
-
+static struct localhost *lhost = NULL;
 /**
  * @brief 获取UDP接收和发送缓冲区
  */

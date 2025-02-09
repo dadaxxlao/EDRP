@@ -5,8 +5,6 @@
 #include <string.h>
 #include <arpa/inet.h>
 
-static struct ng_tcp_table *tcp_table = NULL;
-
 /**
  * @brief 获取TCP流管理实例
  */

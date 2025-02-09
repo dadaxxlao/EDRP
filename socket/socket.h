@@ -6,18 +6,18 @@
 #include <pthread.h>
 #include <errno.h>
 #include <syslog.h>
+#include <rte_ether.h>
+#include <rte_ring.h>
+#include <rte_mempool.h>
 
-// 套接字类型定义
-#define SOCKET_TYPE_UDP 0
-#define SOCKET_TYPE_TCP 1
-
-
-
-// 添加日志级别定义
 #define SOCKET_LOG_ERROR    0
 #define SOCKET_LOG_WARNING  1
 #define SOCKET_LOG_INFO     2
 #define SOCKET_LOG_DEBUG    3
+
+// 套接字类型定义
+#define SOCKET_TYPE_UDP 0
+#define SOCKET_TYPE_TCP 1
 
 // 错误码定义
 #define SOCKET_SUCCESS           0   // 成功
@@ -33,15 +33,60 @@
 #define SOCKET_RING_SIZE     1024
 #define SOCKET_TIMEOUT_SEC   30
 
-// 添加日志宏
-#define SOCKET_LOG(level, fmt, ...) \
-    syslog(level, "[SOCKET][%s:%d] " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+// 在header文件中添加颜色定义
+#define ANSI_COLOR_RED     "\x1b[31m"
+#define ANSI_COLOR_YELLOW  "\x1b[33m"
+#define ANSI_COLOR_BLUE    "\x1b[34m"
+#define ANSI_COLOR_RESET   "\x1b[0m"
 
-// 确保SOCK_NONBLOCK有定义
-#ifndef SOCK_NONBLOCK
-#define SOCK_NONBLOCK 04000
-#endif
+// 重新定义SOCKET_LOG宏
+#define SOCKET_LOG(level, fmt, ...) do { \
+    switch(level) { \
+        case SOCKET_LOG_ERROR: \
+            syslog(LOG_ERR, ANSI_COLOR_RED "[SOCKET][ERROR][%s:%d] " fmt ANSI_COLOR_RESET, \
+                   __FILE__, __LINE__, ##__VA_ARGS__); \
+            break; \
+        case SOCKET_LOG_WARNING: \
+            syslog(LOG_WARNING, ANSI_COLOR_YELLOW "[SOCKET][WARN][%s:%d] " fmt ANSI_COLOR_RESET, \
+                   __FILE__, __LINE__, ##__VA_ARGS__); \
+            break; \
+        case SOCKET_LOG_INFO: \
+            syslog(LOG_INFO, "[SOCKET][INFO][%s:%d] " fmt, \
+                   __FILE__, __LINE__, ##__VA_ARGS__); \
+            break; \
+        case SOCKET_LOG_DEBUG: \
+            syslog(LOG_DEBUG, ANSI_COLOR_BLUE "[SOCKET][DEBUG][%s:%d] " fmt ANSI_COLOR_RESET, \
+                   __FILE__, __LINE__, ##__VA_ARGS__); \
+            break; \
+    } \
+} while(0)
 
+
+// DPDK Initialization 环形结构区
+static struct inout_ring {
+    struct rte_ring *in;
+    struct rte_ring *out;
+} *g_ring = NULL;
+
+// DPDK Initialization 源MAC地址
+static uint8_t g_src_mac[RTE_ETHER_ADDR_LEN];
+#define MAKE_IPV4_ADDR(a, b, c, d) (a + (b<<8) + (c<<16) + (d<<24))
+static uint32_t g_local_ip = MAKE_IPV4_ADDR(192, 168, 11, 14);
+
+// DPDK Initialization 内存池
+static struct rte_mempool *g_mbuf_pool = NULL;
+
+static struct socket_config {
+    int max_fds;
+    int ring_size;
+    int timeout_sec;
+    int log_level;
+} g_config = {
+    .max_fds = SOCKET_MAX_FD,
+    .ring_size = SOCKET_RING_SIZE,
+    .timeout_sec = SOCKET_TIMEOUT_SEC,
+    .log_level = SOCKET_LOG_DEBUG
+};
 
 /**
  * @brief 创建套接字

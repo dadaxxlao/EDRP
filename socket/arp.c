@@ -75,7 +75,7 @@ struct rte_mbuf *arp_send_request(struct rte_mempool *mbuf_pool, uint32_t dip) {
     struct rte_ether_hdr *eth = (struct rte_ether_hdr *)pkt_data;
 
     // 以太网头部
-    rte_memcpy(eth->src_addr.addr_bytes, gSrcMac, RTE_ETHER_ADDR_LEN);
+    rte_memcpy(eth->src_addr.addr_bytes, g_src_mac, RTE_ETHER_ADDR_LEN);
     uint8_t mac[RTE_ETHER_ADDR_LEN] = {0};
     rte_memcpy(eth->dst_addr.addr_bytes, mac, RTE_ETHER_ADDR_LEN);
     eth->ether_type = htons(RTE_ETHER_TYPE_ARP);
@@ -88,9 +88,9 @@ struct rte_mbuf *arp_send_request(struct rte_mempool *mbuf_pool, uint32_t dip) {
     arp->arp_plen = sizeof(uint32_t);
     arp->arp_opcode = htons(RTE_ARP_OP_REQUEST);
 
-    rte_memcpy(arp->arp_data.arp_sha.addr_bytes, gSrcMac, RTE_ETHER_ADDR_LEN);
+    rte_memcpy(arp->arp_data.arp_sha.addr_bytes, g_src_mac, RTE_ETHER_ADDR_LEN);
     memset(arp->arp_data.arp_tha.addr_bytes, 0, RTE_ETHER_ADDR_LEN); // 目标MAC地址为零
-    arp->arp_data.arp_sip = gLocalIp;
+    arp->arp_data.arp_sip = g_local_ip;
     arp->arp_data.arp_tip = dip;
 
     return mbuf;
@@ -112,7 +112,7 @@ struct rte_mbuf *arp_send_reply(struct rte_mempool *mbuf_pool, uint32_t sip, uin
     struct rte_ether_hdr *eth = (struct rte_ether_hdr *)pkt_data;
 
     // 以太网头部
-    rte_memcpy(eth->src_addr.addr_bytes, gSrcMac, RTE_ETHER_ADDR_LEN);
+    rte_memcpy(eth->src_addr.addr_bytes, g_src_mac, RTE_ETHER_ADDR_LEN);
     rte_memcpy(eth->dst_addr.addr_bytes, dst_mac, RTE_ETHER_ADDR_LEN);
     eth->ether_type = htons(RTE_ETHER_TYPE_ARP);
 
@@ -124,7 +124,7 @@ struct rte_mbuf *arp_send_reply(struct rte_mempool *mbuf_pool, uint32_t sip, uin
     arp->arp_plen = sizeof(uint32_t);
     arp->arp_opcode = htons(RTE_ARP_OP_REPLY);
 
-    rte_memcpy(arp->arp_data.arp_sha.addr_bytes, gSrcMac, RTE_ETHER_ADDR_LEN);
+    rte_memcpy(arp->arp_data.arp_sha.addr_bytes, g_src_mac, RTE_ETHER_ADDR_LEN);
     rte_memcpy(arp->arp_data.arp_tha.addr_bytes, dst_mac, RTE_ETHER_ADDR_LEN);
     arp->arp_data.arp_sip = sip;
     arp->arp_data.arp_tip = dip;
