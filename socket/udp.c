@@ -82,15 +82,13 @@ int udp_out(struct rte_mempool *mbuf_pool) {
         uint8_t *dstmac = arp_get_dst_macaddr(ol->dip);
         if (dstmac == NULL) {
             struct rte_mbuf *arpbuf = arp_send_request(mbuf_pool, ol->dip);
-            struct inout_ring *ring = ringInstance();
-            rte_ring_mp_enqueue_burst(ring->out, (void **)&arpbuf, 1, NULL);
+            rte_ring_mp_enqueue_burst(g_ring->out, (void **)&arpbuf, 1, NULL);
             rte_ring_mp_enqueue(host->sndbuf, ol);
         } else {
             struct rte_mbuf *udpbuf = udp_send_packet(mbuf_pool, ol->sip, ol->dip, ol->sport, ol->dport,
                                                       host->localmac, dstmac, ol->data, ol->length);
 
-            struct inout_ring *ring = ringInstance();
-            rte_ring_mp_enqueue_burst(ring->out, (void **)&udpbuf, 1, NULL);
+            rte_ring_mp_enqueue_burst(g_ring->out, (void **)&udpbuf, 1, NULL);
         }
     }
     return 0;

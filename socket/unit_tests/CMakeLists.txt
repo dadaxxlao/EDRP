@@ -5,15 +5,23 @@ project(EDRP_Socket_Tests C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# 添加SSSE3支持
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mssse3")
+
 # 查找DPDK包
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DPDK REQUIRED libdpdk)
 
+# 设置DPDK链接选项
+link_directories(${DPDK_LIBRARY_DIRS})
+string(REPLACE ";" " " DPDK_LDFLAGS_STR "${DPDK_LDFLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${DPDK_LDFLAGS_STR}")
+
 # 添加Unity测试框架
 add_library(unity STATIC
-    unity/unity.c
-    unity/unity_internals.h
-    unity/unity.h
+    ../unity/unity.c
+    ../unity/unity_internals.h
+    ../unity/unity.h
 )
 
 # 设置包含目录
@@ -27,6 +35,9 @@ include_directories(
 add_executable(test_init
     test_init.c
     ../socket.c
+    ../tcp.c
+    ../arp.c
+    ../udp.c
 )
 
 # 链接依赖库

@@ -18,13 +18,6 @@ fi
 mkdir -p build
 cd build
 
-# 下载Unity测试框架（如果不存在）
-if [ ! -d "unity" ]; then
-    echo -e "${YELLOW}下载Unity测试框架...${NC}"
-    git clone https://github.com/ThrowTheSwitch/Unity.git unity
-    cp unity/src/* ../unity/
-fi
-
 # 运行CMake构建
 echo -e "${YELLOW}配置CMake...${NC}"
 cmake ..
@@ -35,7 +28,7 @@ make
 
 # 运行测试
 echo -e "${YELLOW}运行测试...${NC}"
-./test_init
+strace -f -o strace.log ./test_init
 
 # 检查测试结果
 if [ $? -eq 0 ]; then

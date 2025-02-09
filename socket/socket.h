@@ -68,6 +68,7 @@ static struct inout_ring {
     struct rte_ring *out;
 } *g_ring = NULL;
 
+
 // DPDK Initialization 源MAC地址
 static uint8_t g_src_mac[RTE_ETHER_ADDR_LEN];
 #define MAKE_IPV4_ADDR(a, b, c, d) (a + (b<<8) + (c<<16) + (d<<24))

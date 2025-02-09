@@ -1,0 +1,5 @@
+/home/dpdk1/EDRP/socket/unit_tests/build/CMakeFiles/unity.dir
+/home/dpdk1/EDRP/socket/unit_tests/build/CMakeFiles/test_init.dir
+/home/dpdk1/EDRP/socket/unit_tests/build/CMakeFiles/test.dir
+/home/dpdk1/EDRP/socket/unit_tests/build/CMakeFiles/edit_cache.dir
+/home/dpdk1/EDRP/socket/unit_tests/build/CMakeFiles/rebuild_cache.dir

@@ -11,8 +11,10 @@
 #include <rte_ring.h>
 #include <rte_ethdev.h>
 #include <rte_mbuf.h>
-#include <linux/time.h>
+#include <time.h>
+//#include <linux/time.h>
 #include "edrp_socket.h"
+#include <rte_ether.h>
 
 // 全局套接字位图（用于分配唯一的文件描述符）
 static unsigned char fd_bitmap[1024] = {0};
@@ -34,11 +36,12 @@ static pthread_t g_rx_tid;
 static pthread_t g_tx_tid;
 static volatile int g_thread_running = 1;  // 线程运行状态控制
 
-// DPDK Initialization 线程函数声明
+// DPDK Initialization 函数声明
 static int rx_thread(__rte_unused void *arg);
 static int tx_thread(__rte_unused void *arg);
+static int init_rings(void);
 
-//--------------------------------- Socket配置与检验函数实现 ---------------------------------//
+//--------------------------------- Socket辅助函数实现 ---------------------------------//
 
 /**
  * @brief 检查端口是否已被使用
@@ -70,6 +73,118 @@ int check_port_in_use(uint16_t port) {
 
     return 0;
 }
+
+/**
+ * @brief 从位图中分配一个未使用的文件描述符
+ */
+static int allocate_fd(void) {
+    pthread_mutex_lock(&g_config_mutex);
+    
+    for (int fd = 3; fd < g_config.max_fds; fd++) {
+        int byte = fd / 8;
+        int bit = fd % 8;
+        if ((fd_bitmap[byte] & (1 << bit)) == 0) {
+            fd_bitmap[byte] |= (1 << bit);
+            pthread_mutex_unlock(&g_config_mutex);
+            SOCKET_LOG(SOCKET_LOG_DEBUG, "Allocated fd=%d", fd);
+            return fd;
+        }
+    }
+    
+    pthread_mutex_unlock(&g_config_mutex);
+    SOCKET_LOG(SOCKET_LOG_ERROR, "No available file descriptors");
+    return SOCKET_ERROR_NOMEM;
+}
+
+/**
+ * @brief 释放文件描述符
+ */
+static void release_fd(int fd) {
+    if (fd < 3 || fd >= g_config.max_fds) {
+        SOCKET_LOG(SOCKET_LOG_WARNING, "Invalid file descriptor: %d", fd);
+        return;
+    }
+
+    pthread_mutex_lock(&g_config_mutex);
+    int byte = fd / 8;
+    int bit = fd % 8;
+    fd_bitmap[byte] &= ~(1 << bit);
+    pthread_mutex_unlock(&g_config_mutex);
+    
+    SOCKET_LOG(SOCKET_LOG_DEBUG, "Released fd=%d", fd);
+}
+
+/**
+ * @brief 根据文件描述符获取TCP流或UDP上下文
+ */
+static void* get_context(int sockfd) {
+    if (sockfd < 3 || sockfd >= g_config.max_fds) {
+        SOCKET_LOG(SOCKET_LOG_ERROR, "Invalid socket descriptor: fd=%d", sockfd);
+        return NULL;
+    }
+
+    // 检查fd是否已分配
+    pthread_mutex_lock(&g_config_mutex);
+    int byte = sockfd / 8;
+    int bit = sockfd % 8;
+    if ((fd_bitmap[byte] & (1 << bit)) == 0) {
+        pthread_mutex_unlock(&g_config_mutex);
+        SOCKET_LOG(SOCKET_LOG_ERROR, "Socket descriptor not allocated: fd=%d", sockfd);
+        return NULL;
+    }
+    pthread_mutex_unlock(&g_config_mutex);
+
+    // UDP上下文查找
+    struct localhost *udp_ctx;
+	for (udp_ctx = lhost; udp_ctx != NULL;udp_ctx = udp_ctx->next) {
+
+		if (sockfd == udp_ctx->fd) {
+			return udp_ctx;
+		}
+
+	}
+    // TCP流查找
+    struct ng_tcp_stream *tcp_stream = NULL;
+	struct ng_tcp_table *table = tcp_table_instance();
+	for (tcp_stream = table->tcb_set;tcp_stream != NULL;tcp_stream = tcp_stream->next) {
+		if (sockfd == tcp_stream->fd) {
+			return tcp_stream;
+		}
+	}
+
+    SOCKET_LOG(SOCKET_LOG_ERROR, "No context found for socket descriptor: fd=%d", sockfd);
+    return NULL;
+}
+
+static struct ng_tcp_stream *get_accept_tcp(uint16_t dport) {
+    SOCKET_LOG(SOCKET_LOG_DEBUG, "Looking for TCP stream with destination port %d", ntohs(dport));
+
+    // 获取TCP表实例
+    struct ng_tcp_table *table = tcp_table_instance();
+    if (!table) {
+        SOCKET_LOG(SOCKET_LOG_ERROR, "Failed to get TCP table instance");
+        return NULL;
+    }
+
+    // 检查TCP表是否为空
+    if (!table->tcb_set) {
+        SOCKET_LOG(SOCKET_LOG_DEBUG, "TCP table is empty");
+        return NULL;
+    }
+
+    // 遍历TCP流查找匹配项
+    struct ng_tcp_stream *apt;
+    for (apt = table->tcb_set; apt != NULL; apt = apt->next) {
+        if (dport == apt->dport && apt->fd == -1) {
+            SOCKET_LOG(SOCKET_LOG_INFO, "Found matching TCP stream for port %d", ntohs(dport));
+            return apt;
+        }
+    }
+
+    SOCKET_LOG(SOCKET_LOG_DEBUG, "No matching TCP stream found for port %d", ntohs(dport));
+    return NULL;
+}
+//--------------------------------- Socket配置与检验函数实现 ---------------------------------//
 
 /**
  * @brief 验证socket配置参数的合法性
@@ -206,27 +321,7 @@ void socket_set_log_level(int level) {
     SOCKET_LOG(SOCKET_LOG_INFO, "Log level set to %d", level);
 }
 
-/**
- * @brief 从位图中分配一个未使用的文件描述符
- */
-static int allocate_fd(void) {
-    pthread_mutex_lock(&g_config_mutex);
-    
-    for (int fd = 3; fd < g_config.max_fds; fd++) {
-        int byte = fd / 8;
-        int bit = fd % 8;
-        if ((fd_bitmap[byte] & (1 << bit)) == 0) {
-            fd_bitmap[byte] |= (1 << bit);
-            pthread_mutex_unlock(&g_config_mutex);
-            SOCKET_LOG(SOCKET_LOG_DEBUG, "Allocated fd=%d", fd);
-            return fd;
-        }
-    }
-    
-    pthread_mutex_unlock(&g_config_mutex);
-    SOCKET_LOG(SOCKET_LOG_ERROR, "No available file descriptors");
-    return SOCKET_ERROR_NOMEM;
-}
+
 
 /**
  * @brief 资源统计函数
@@ -248,59 +343,6 @@ void socket_stats(struct socket_statistics *stats) {
                stats->used_fds, stats->total_fds);
 }
 
-/**
- * @brief 释放文件描述符
- */
-static void release_fd(int fd) {
-    if (fd < 3 || fd >= g_config.max_fds) {
-        SOCKET_LOG(SOCKET_LOG_WARNING, "Invalid file descriptor: %d", fd);
-        return;
-    }
-
-    pthread_mutex_lock(&g_config_mutex);
-    int byte = fd / 8;
-    int bit = fd % 8;
-    fd_bitmap[byte] &= ~(1 << bit);
-    pthread_mutex_unlock(&g_config_mutex);
-    
-    SOCKET_LOG(SOCKET_LOG_DEBUG, "Released fd=%d", fd);
-}
-
-/**
- * @brief 根据文件描述符获取TCP流或UDP上下文
- */
-static void* get_context(int sockfd) {
-    if (sockfd < 3 || sockfd >= g_config.max_fds) {
-        SOCKET_LOG(SOCKET_LOG_ERROR, "Invalid socket descriptor: fd=%d", sockfd);
-        return NULL;
-    }
-
-    // 检查fd是否已分配
-    pthread_mutex_lock(&g_config_mutex);
-    int byte = sockfd / 8;
-    int bit = sockfd % 8;
-    if ((fd_bitmap[byte] & (1 << bit)) == 0) {
-        pthread_mutex_unlock(&g_config_mutex);
-        SOCKET_LOG(SOCKET_LOG_ERROR, "Socket descriptor not allocated: fd=%d", sockfd);
-        return NULL;
-    }
-    pthread_mutex_unlock(&g_config_mutex);
-
-    // UDP上下文查找
-    struct localhost *udp_ctx = udp_get_host_by_fd(sockfd);
-    if (udp_ctx != NULL) {
-        return udp_ctx;
-    }
-
-    // TCP流查找
-    struct ng_tcp_stream *tcp_stream = tcp_find_stream_by_fd(sockfd);
-    if (tcp_stream != NULL) {
-        return tcp_stream;
-    }
-
-    SOCKET_LOG(SOCKET_LOG_ERROR, "No context found for socket descriptor: fd=%d", sockfd);
-    return NULL;
-}
 
 //--------------------------------- Socket内部接口实现 ---------------------------------//
 
@@ -503,7 +545,7 @@ int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
 int listen(int sockfd, int backlog) {
     SOCKET_LOG(SOCKET_LOG_DEBUG, "Setting socket fd=%d to listen mode with backlog=%d", sockfd, backlog);
 
-    struct ng_tcp_stream *stream = tcp_find_stream_by_fd(sockfd);
+    struct ng_tcp_stream *stream = get_context(sockfd);
     if (!stream) {
         SOCKET_LOG(SOCKET_LOG_ERROR, "Invalid socket descriptor: fd=%d", sockfd);
         errno = EBADF;
@@ -533,7 +575,7 @@ int listen(int sockfd, int backlog) {
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     SOCKET_LOG(SOCKET_LOG_DEBUG, "Accepting connection on socket fd=%d", sockfd);
 
-    struct ng_tcp_stream *listener = tcp_find_stream_by_fd(sockfd);
+    struct ng_tcp_stream *listener = get_context(sockfd);
     if (!listener) {
         SOCKET_LOG(SOCKET_LOG_ERROR, "Invalid socket descriptor: fd=%d", sockfd);
         errno = EBADF;
@@ -562,7 +604,7 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
     struct ng_tcp_stream *new_stream = NULL;
     pthread_mutex_lock(&listener->mutex);
     
-    while ((new_stream = tcp_get_pending_connection(listener)) == NULL) {
+    while ((new_stream = get_accept_tcp(listener->dport)) == NULL) {
         if (non_blocking) {
             SOCKET_LOG(SOCKET_LOG_DEBUG, "No pending connection available (non-blocking mode)");
             pthread_mutex_unlock(&listener->mutex);
@@ -1077,7 +1119,7 @@ int close(int sockfd) {
 static int init_dpdk(void) {
     char *argv[] = {
         "socket_app",
-        "-l", "0-1",        // 使用CPU核心0-1
+        "-l", "0-3",        // 使用CPU核心0-1
         "-n", "4",          // 设置内存通道数
         "--proc-type=auto", // 自动设置进程类型
         NULL
