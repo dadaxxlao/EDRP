@@ -1,6 +1,6 @@
 # DPDK 网络协议栈项目
 
-这是一个基于DPDK（Data Plane Development Kit）实现的高性能网络协议栈项目，支持TCP/UDP协议，并实现了基本的网络功能。
+这是一个基于DPDK（Data Plane Development Kit）实现的高性能弹性网络协议栈项目，支持EDRP/TCP/UDP协议，并实现了基本的网络功能。
 
 ## 功能特性
 
