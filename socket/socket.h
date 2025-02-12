@@ -153,6 +153,7 @@ int check_port_in_use(uint16_t port);
 
 // 初始化和清理接口
 int socket_init(void);
+int init_dpdk(void);
 void socket_cleanup(void);
 
 // 配置接口

@@ -56,12 +56,9 @@ int init_dpdk(void) {
 
     // 准备EAL参数
     char *dpdk_argv[] = {
-        "dpdk_init_test",          // 程序名
-        "-l", "0-3",              // 使用CPU核心0-3
-        "-n", "4",                // 设置内存通道数
-        "--proc-type=auto",       // 自动设置进程类型
-        "--file-prefix=socket",   // 添加唯一的文件前缀
-        "--socket-mem=512",       // 每个socket分配512MB内存
+        "dpdk_init_test",              // 程序名
+        "-l", "0-3",               // 使用CPU核心0-3
+        "-n", "4",                 // 设置内存通道数
         NULL
     };
     int dpdk_argc = sizeof(dpdk_argv) / sizeof(dpdk_argv[0]) - 1;

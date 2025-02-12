@@ -18,7 +18,14 @@ test_c_args = [
 # 包含目录
 include_dirs = include_directories('/usr/local/include')
 
-# 创建dpdk初始化库
+# 创建edrp_socket库
+#edrp_socket_lib = static_library('edrp_socket',
+#  sources: ['../socket.c', '../udp.c', '../tcp.c', '../arp.c'],
+#  dependencies: [dpdk_dep, thread_dep],
+#  c_args: test_c_args,
+#  include_directories: include_dirs
+#)
+# 创建dpdk_init库
 dpdk_init_lib = static_library('dpdk_init',
   sources: ['dpdk_eal_test.c'],
   dependencies: [dpdk_dep, thread_dep],
@@ -32,6 +39,7 @@ dpdk_test = executable('dpdk_eal_test',
   dependencies: [dpdk_dep, thread_dep],
   c_args: test_c_args,
   include_directories: include_dirs,
+  #link_with: [edrp_socket_lib, dpdk_init_lib],
   link_with: dpdk_init_lib,
   link_args: [
     '-L/usr/local/lib/x86_64-linux-gnu',
