@@ -35,7 +35,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         -n|--nic)
-            if [[ $2 =~ ^([^:]+):([^:]+)$ ]]; then
+            if [[ $2 =~ ^([^:]+):([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F])$ ]]; then
                 NIC_NAME="${BASH_REMATCH[1]}"
                 NIC_PCI="${BASH_REMATCH[2]}"
                 NIC_MAP[$NIC_NAME]=$NIC_PCI
@@ -58,6 +58,7 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
 
 # 检查是否指定了网卡
 if [ ${#NIC_MAP[@]} -eq 0 ]; then

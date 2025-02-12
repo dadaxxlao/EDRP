@@ -1,2 +1,0 @@
-/usr/bin/ar qc libunity.a CMakeFiles/unity.dir/home/dpdk1/EDRP/socket/unity/unity.c.o
-/usr/bin/ranlib libunity.a

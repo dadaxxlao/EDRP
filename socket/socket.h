@@ -10,6 +10,11 @@
 #include <rte_ring.h>
 #include <rte_mempool.h>
 
+// 添加IP地址转换宏
+#define MAKE_IPV4_ADDR(a, b, c, d) \
+    (((uint32_t)a) | (((uint32_t)b) << 8) | \
+    (((uint32_t)c) << 16) | (((uint32_t)d) << 24))
+
 #define SOCKET_LOG_ERROR    0
 #define SOCKET_LOG_WARNING  1
 #define SOCKET_LOG_INFO     2
@@ -63,31 +68,30 @@
 
 
 // DPDK Initialization 环形结构区
-static struct inout_ring {
+struct inout_ring {
     struct rte_ring *in;
     struct rte_ring *out;
-} *g_ring = NULL;
+};
+extern struct inout_ring *g_ring;
 
-
-// DPDK Initialization 源MAC地址
-static uint8_t g_src_mac[RTE_ETHER_ADDR_LEN];
-#define MAKE_IPV4_ADDR(a, b, c, d) (a + (b<<8) + (c<<16) + (d<<24))
-static uint32_t g_local_ip = MAKE_IPV4_ADDR(192, 168, 11, 14);
+// DPDK Initialization 源MAC地址和IP地址
+extern uint8_t g_src_mac[RTE_ETHER_ADDR_LEN];
+extern uint32_t g_local_ip;
 
 // DPDK Initialization 内存池
-static struct rte_mempool *g_mbuf_pool = NULL;
+extern struct rte_mempool *g_mbuf_pool;
 
-static struct socket_config {
+// Socket配置
+struct socket_config {
     int max_fds;
     int ring_size;
     int timeout_sec;
     int log_level;
-} g_config = {
-    .max_fds = SOCKET_MAX_FD,
-    .ring_size = SOCKET_RING_SIZE,
-    .timeout_sec = SOCKET_TIMEOUT_SEC,
-    .log_level = SOCKET_LOG_DEBUG
 };
+extern struct socket_config g_config;
+
+// 添加初始化状态标志
+extern int g_socket_initialized;
 
 /**
  * @brief 创建套接字

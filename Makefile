@@ -18,10 +18,12 @@ ifeq ($(shell pkg-config --exists libdpdk && echo 0),0)
 
 all: shared static
 .PHONY: shared static
-shared: build/$(APP)-shared
-	cp -f build/$(APP)-shared build/$(APP)
-static: build/$(APP)-static
-	cp -f build/$(APP)-static build/$(APP)
+#shared: build/$(APP)-shared
+#	cp -f build/$(APP)-shared build/$(APP)
+#static: build/$(APP)-static
+#	cp -f build/$(APP)-static build/$(APP)
+shared: build/lib$(APP).so
+static: build/lib$(APP).a
 
 PKGCONF=pkg-config --define-prefix
 

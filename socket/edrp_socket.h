@@ -19,6 +19,7 @@ int edrp_close(int sockfd);
 
 // 初始化和清理
 int edrp_init(void);
+int edrp_init_dpdk(void);
 void edrp_cleanup(void);
 
 // 配置接口

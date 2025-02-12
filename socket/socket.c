@@ -16,13 +16,26 @@
 #include "edrp_socket.h"
 #include <rte_ether.h>
 
+// 全局变量定义
+struct inout_ring *g_ring = NULL;
+uint8_t g_src_mac[RTE_ETHER_ADDR_LEN] = {0};
+uint32_t g_local_ip = 0;  // 初始化为0，在socket_init中设置实际值
+struct rte_mempool *g_mbuf_pool = NULL;
+struct socket_config g_config = {
+    .max_fds = SOCKET_MAX_FD,
+    .ring_size = SOCKET_RING_SIZE,
+    .timeout_sec = SOCKET_TIMEOUT_SEC,
+    .log_level = SOCKET_LOG_DEBUG
+};
+
 // 全局套接字位图（用于分配唯一的文件描述符）
 static unsigned char fd_bitmap[1024] = {0};
 
 // 在全局变量区域添加socket配置互斥锁
 static pthread_mutex_t g_config_mutex;
 
-
+// 初始化状态标志
+int g_socket_initialized = 0;
 
 // DPDK Initialization 宏定义
 #define NUM_MBUFS 8192
@@ -356,8 +369,8 @@ int socket(int domain, int type, int protocol) {
     int non_blocking = (type & SOCK_NONBLOCK);
     type &= ~SOCK_NONBLOCK;  // 清除标志位
 
-    if (domain != AF_INET) {
-        SOCKET_LOG(SOCKET_LOG_ERROR, "Unsupported domain: %d", domain);
+    if (domain != PF_INET && domain != AF_INET) {
+        SOCKET_LOG(SOCKET_LOG_ERROR, "Unsupported domain: %d (only PF_INET/AF_INET supported)", domain);
         errno = EAFNOSUPPORT;
         return SOCKET_ERROR_INVALID;
     }
@@ -1117,19 +1130,31 @@ int close(int sockfd) {
  * @brief 初始化DPDK环境
  */
 static int init_dpdk(void) {
-    char *argv[] = {
-        "socket_app",
-        "-l", "0-3",        // 使用CPU核心0-1
-        "-n", "4",          // 设置内存通道数
-        "--proc-type=auto", // 自动设置进程类型
+    SOCKET_LOG(SOCKET_LOG_INFO, "Initializing DPDK...");
+
+    // 准备EAL参数
+    char *dpdk_argv[] = {
+        "socket_test",              // 程序名
+        "-l", "0-3",               // 使用CPU核心0-3
+        "-n", "4",                 // 设置内存通道数
+        "--proc-type=auto",        // 自动设置进程类型
+        "--file-prefix=socket",    // 添加唯一的文件前缀
+        "--socket-mem=512",        // 每个socket分配512MB内存
         NULL
     };
-    int argc = sizeof(argv) / sizeof(argv[0]) - 1;
-    
+    int dpdk_argc = sizeof(dpdk_argv) / sizeof(dpdk_argv[0]) - 1;
+
     // 初始化EAL
-    int ret = rte_eal_init(argc, argv);
+    int ret = rte_eal_init(dpdk_argc, dpdk_argv);
     if (ret < 0) {
         SOCKET_LOG(SOCKET_LOG_ERROR, "Error with EAL init: %s", rte_strerror(rte_errno));
+        return SOCKET_ERROR_INVALID;
+    }
+
+    // 检查是否有足够的内存
+    if (rte_eal_has_hugepages() == 0) {
+        SOCKET_LOG(SOCKET_LOG_ERROR, "No hugepages available");
+        rte_eal_cleanup();
         return SOCKET_ERROR_INVALID;
     }
 
@@ -1166,9 +1191,15 @@ static int init_dpdk(void) {
         rte_eal_cleanup();
         return SOCKET_ERROR_INVALID;
     }
+
+    // 配置第一个可用端口
+    uint16_t port_id;
+    RTE_ETH_FOREACH_DEV(port_id) {
+        break;  // 使用第一个可用端口
+    }
     
     // 获取MAC地址
-    ret = rte_eth_macaddr_get(0, (struct rte_ether_addr *)g_src_mac);
+    ret = rte_eth_macaddr_get(port_id, (struct rte_ether_addr *)g_src_mac);
     if (ret < 0) {
         SOCKET_LOG(SOCKET_LOG_ERROR, "Failed to get MAC address: %s", rte_strerror(-ret));
         rte_mempool_free(g_mbuf_pool);
@@ -1180,9 +1211,9 @@ static int init_dpdk(void) {
     }
     
     // 配置端口
-    // TODO: 这里只有单端口，需要修改
-    struct rte_eth_conf port_conf = {0};
-    ret = rte_eth_dev_configure(0, 1, 1, &port_conf);
+    struct rte_eth_conf port_conf;
+    memset(&port_conf, 0, sizeof(struct rte_eth_conf));
+    ret = rte_eth_dev_configure(port_id, 1, 1, &port_conf);
     if (ret < 0) {
         SOCKET_LOG(SOCKET_LOG_ERROR, "Port configuration failed: %s", rte_strerror(-ret));
         rte_mempool_free(g_mbuf_pool);
@@ -1194,13 +1225,13 @@ static int init_dpdk(void) {
     }
 
     // 设置接收队列
-    ret = rte_eth_rx_queue_setup(0, 0, 1024, 
-                                rte_eth_dev_socket_id(0), 
+    ret = rte_eth_rx_queue_setup(port_id, 0, 1024, 
+                                rte_eth_dev_socket_id(port_id), 
                                 NULL, 
                                 g_mbuf_pool);
     if (ret < 0) {
         SOCKET_LOG(SOCKET_LOG_ERROR, "RX queue setup failed: %s", rte_strerror(-ret));
-        rte_eth_dev_close(0);
+        rte_eth_dev_close(port_id);
         rte_mempool_free(g_mbuf_pool);
         rte_ring_free(g_ring->in);
         rte_ring_free(g_ring->out);
@@ -1210,12 +1241,12 @@ static int init_dpdk(void) {
     }
 
     // 设置发送队列
-    ret = rte_eth_tx_queue_setup(0, 0, 1024, 
-                                rte_eth_dev_socket_id(0), 
+    ret = rte_eth_tx_queue_setup(port_id, 0, 1024, 
+                                rte_eth_dev_socket_id(port_id), 
                                 NULL);
     if (ret < 0) {
         SOCKET_LOG(SOCKET_LOG_ERROR, "TX queue setup failed: %s", rte_strerror(-ret));
-        rte_eth_dev_close(0);
+        rte_eth_dev_close(port_id);
         rte_mempool_free(g_mbuf_pool);
         rte_ring_free(g_ring->in);
         rte_ring_free(g_ring->out);
@@ -1225,10 +1256,10 @@ static int init_dpdk(void) {
     }
 
     // 启动端口
-    ret = rte_eth_dev_start(0);
+    ret = rte_eth_dev_start(port_id);
     if (ret < 0) {
         SOCKET_LOG(SOCKET_LOG_ERROR, "Port start failed: %s", rte_strerror(-ret));
-        rte_eth_dev_close(0);
+        rte_eth_dev_close(port_id);
         rte_mempool_free(g_mbuf_pool);
         rte_ring_free(g_ring->in);
         rte_ring_free(g_ring->out);
@@ -1237,6 +1268,10 @@ static int init_dpdk(void) {
         return SOCKET_ERROR_INVALID;
     }
 
+    // 设置混杂模式
+    rte_eth_promiscuous_enable(port_id);
+
+    SOCKET_LOG(SOCKET_LOG_INFO, "DPDK initialization completed successfully on port %u", port_id);
     return SOCKET_SUCCESS;
 }
 
@@ -1291,6 +1326,12 @@ static int init_rings(void) {
  * @brief 修改后的socket_init函数
  */
 int socket_init(void) {
+    // 检查是否已经初始化
+    if (g_socket_initialized) {
+        SOCKET_LOG(SOCKET_LOG_WARNING, "Socket already initialized");
+        return SOCKET_SUCCESS;
+    }
+
     int ret;
 
     // 初始化配置互斥锁
@@ -1333,6 +1374,7 @@ int socket_init(void) {
         socket_cleanup();
         return SOCKET_ERROR_INVALID;
     }
+    g_rx_tid = pthread_self();  // 保存接收线程ID
 
     // 在指定核心上启动发送线程
     ret = rte_eal_remote_launch((lcore_function_t *)tx_thread, NULL, lcore_tx);
@@ -1344,9 +1386,28 @@ int socket_init(void) {
         socket_cleanup();
         return SOCKET_ERROR_INVALID;
     }
+    g_tx_tid = pthread_self();  // 保存发送线程ID
 
-    SOCKET_LOG(SOCKET_LOG_INFO, "Socket initialization completed successfully (RX on core %u, TX on core %u)", 
-               lcore_rx, lcore_tx);
+    // 初始化TCP表
+    struct ng_tcp_table *table = tcp_table_instance();
+    if (!table) {
+        SOCKET_LOG(SOCKET_LOG_ERROR, "Failed to initialize TCP table");
+        socket_cleanup();
+        return SOCKET_ERROR_INVALID;
+    }
+    tcp_table = table;  // 保存TCP表实例
+
+    // 设置本地IP地址
+    g_local_ip = MAKE_IPV4_ADDR(192, 168, 11, 14);
+    SOCKET_LOG(SOCKET_LOG_INFO, "Local IP address set to %u.%u.%u.%u",
+              (g_local_ip & 0xFF),
+              ((g_local_ip >> 8) & 0xFF),
+              ((g_local_ip >> 16) & 0xFF),
+              ((g_local_ip >> 24) & 0xFF));
+
+    // 标记初始化完成
+    g_socket_initialized = 1;
+    SOCKET_LOG(SOCKET_LOG_INFO, "Socket initialization completed successfully");
     return SOCKET_SUCCESS;
 }
 
@@ -1567,6 +1628,10 @@ int edrp_close(int sockfd) {
 
 int edrp_init(void) {
     return socket_init();
+}
+
+int edrp_init_dpdk(void) {
+    return init_dpdk();
 }
 
 void edrp_cleanup(void) {
