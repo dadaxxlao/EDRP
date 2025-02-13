@@ -1,0 +1,27 @@
+option('build_tests',
+  type : 'boolean',
+  value : false,
+  description : '构建测试程序'
+)
+
+option('enable_debug',
+  type : 'boolean',
+  value : false,
+  description : '启用调试信息'
+)
+
+option('max_sockets',
+  type : 'integer',
+  min : 1,
+  max : 65535,
+  value : 1024,
+  description : '最大socket数量'
+)
+
+option('ring_size',
+  type : 'integer',
+  min : 64,
+  max : 65535,
+  value : 1024,
+  description : '环形缓冲区大小'
+) 

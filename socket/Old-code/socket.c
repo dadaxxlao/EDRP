@@ -13,7 +13,6 @@
 #include <rte_mbuf.h>
 #include <time.h>
 //#include <linux/time.h>
-#include "edrp_socket.h"
 #include <rte_ether.h>
 
 // 全局变量定义
@@ -1130,7 +1129,7 @@ int close(int sockfd) {
  * @brief 初始化DPDK环境
  */
 //static
- int init_dpdk(void) {
+int init_dpdk(void) {
     SOCKET_LOG(SOCKET_LOG_INFO, "Initializing DPDK...");
 
     // 准备EAL参数
@@ -1593,81 +1592,4 @@ void socket_cleanup(void) {
     // 8. 关闭日志系统
     SOCKET_LOG(SOCKET_LOG_INFO, "Socket module cleanup completed");
     closelog();
-}
-
-//----------------------------- API包装函数实现 ---------------------------------//
-int edrp_socket(int domain, int type, int protocol) {
-    return socket(domain, type, protocol);
-}
-
-int edrp_bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) {
-    return bind(sockfd, addr, addrlen);
-}
-
-int edrp_listen(int sockfd, int backlog) {
-    return listen(sockfd, backlog);
-}
-
-int edrp_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
-    return accept(sockfd, addr, addrlen);
-}
-
-ssize_t edrp_send(int sockfd, const void *buf, size_t len, int flags) {
-    return send(sockfd, buf, len, flags);
-}
-
-ssize_t edrp_recv(int sockfd, void *buf, size_t len, int flags) {
-    return recv(sockfd, buf, len, flags);
-}
-
-int edrp_close(int sockfd) {
-    return close(sockfd);
-}
-
-int edrp_init(void) {
-    return socket_init();
-}
-
-int edrp_init_dpdk(void) {
-    return init_dpdk();
-}
-
-void edrp_cleanup(void) {
-    socket_cleanup();
-}
-
-int edrp_set_config(const struct edrp_config *config) {
-    struct socket_config sock_config;
-    sock_config.max_fds = config->max_fds;
-    sock_config.ring_size = config->ring_size;
-    sock_config.timeout_sec = config->timeout_sec;
-    sock_config.log_level = config->log_level;
-    return socket_set_config(&sock_config);
-}
-
-int edrp_get_config(struct edrp_config *config) {
-    struct socket_config sock_config;
-    int ret = socket_get_config(&sock_config);
-    if (ret == 0) {
-        config->max_fds = sock_config.max_fds;
-        config->ring_size = sock_config.ring_size;
-        config->timeout_sec = sock_config.timeout_sec;
-        config->log_level = sock_config.log_level;
-    }
-    return ret;
-}
-
-void edrp_get_stats(struct edrp_stats *stats) {
-    struct socket_statistics sock_stats;
-    socket_stats(&sock_stats);
-    stats->total_fds = sock_stats.total_fds;
-    stats->used_fds = sock_stats.used_fds;
-    stats->udp_sockets = sock_stats.udp_sockets;
-    stats->tcp_sockets = sock_stats.tcp_sockets;
-    stats->bytes_sent = sock_stats.bytes_sent;
-    stats->bytes_received = sock_stats.bytes_received;
-}
-
-void edrp_set_log_level(int level) {
-    socket_set_log_level(level);
 }
