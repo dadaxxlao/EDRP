@@ -2,15 +2,63 @@
 #include <rte_malloc.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <limits.h>
+#include <unistd.h>     /* 为fsync函数 */
+#include <sys/types.h>
 
 #include "internal/arp_impl.h"
 #include "internal/logging.h"
 #include "internal/common.h"
 
 /* 全局变量 */
-static struct arp_entry *g_arp_table = NULL;
-static struct arp_request *g_arp_requests = NULL;
-static pthread_mutex_t g_arp_mutex = PTHREAD_MUTEX_INITIALIZER;
+struct arp_entry *g_arp_table = NULL;
+struct arp_request *g_arp_requests = NULL;
+pthread_mutex_t g_arp_mutex = PTHREAD_MUTEX_INITIALIZER;
+volatile int g_arp_table_dirty = 0;  /* 数据是否被修改的标志 */
+volatile int g_static_entry_count = 0;  // 静态条目计数
+
+/* MAC地址解析函数 */
+static int parse_mac_address(const char *str, uint8_t mac[RTE_ETHER_ADDR_LEN]) {
+    unsigned int values[6];
+    int items = sscanf(str, "%02x:%02x:%02x:%02x:%02x:%02x",
+                       &values[0], &values[1], &values[2],
+                       &values[3], &values[4], &values[5]);
+    
+    if (items != 6) return -1;
+    
+    for (int i = 0; i < 6; i++) {
+        if (values[i] > 0xFF) return -1;
+        mac[i] = (uint8_t)values[i];
+    }
+    
+    return 0;
+}
+
+/* 创建ARP表存储目录 */
+static mylib_error_t create_arp_directory(void) {
+    const char *dir = "/var/lib/mylib";
+    struct stat st;
+    
+    /* 检查目录是否存在 */
+    if (stat(dir, &st) == 0) {
+        if (!S_ISDIR(st.st_mode)) {
+            MYLIB_LOG(LOG_LEVEL_ERROR, "%s exists but is not a directory", dir);
+            return MYLIB_ERROR_IO;
+        }
+        return MYLIB_SUCCESS;
+    }
+    
+    /* 创建目录 */
+    if (mkdir(dir, ARP_TABLE_DIR_MODE) != 0) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to create directory %s: %s", 
+                 dir, strerror(errno));
+        return MYLIB_ERROR_IO;
+    }
+    
+    return MYLIB_SUCCESS;
+}
 
 mylib_error_t arp_init(void) {
     pthread_mutex_lock(&g_arp_mutex);
@@ -18,11 +66,21 @@ mylib_error_t arp_init(void) {
     g_arp_requests = NULL;
     pthread_mutex_unlock(&g_arp_mutex);
     
+    /* 加载ARP表 */
+    mylib_error_t ret = arp_load_table();
+    if (ret != MYLIB_SUCCESS) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to load ARP table");
+        return ret;
+    }
+    
     MYLIB_LOG(LOG_LEVEL_INFO, "ARP module initialized");
     return MYLIB_SUCCESS;
 }
 
 void arp_cleanup(void) {
+    /* 保存ARP表 */
+    arp_save_table();
+    
     pthread_mutex_lock(&g_arp_mutex);
     
     /* 清理ARP表 */
@@ -65,7 +123,8 @@ struct arp_entry *arp_lookup(uint32_t ip) {
     return entry;
 }
 
-mylib_error_t arp_add_entry(uint32_t ip, const uint8_t *mac, uint8_t state) {
+mylib_error_t arp_add_entry(uint32_t ip, const uint8_t *mac, 
+                           uint8_t state, time_t timestamp) {
     struct arp_entry *entry = rte_malloc("arp_entry", sizeof(struct arp_entry), 0);
     if (!entry) {
         MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to allocate ARP entry");
@@ -76,18 +135,20 @@ mylib_error_t arp_add_entry(uint32_t ip, const uint8_t *mac, uint8_t state) {
     entry->ip = ip;
     rte_memcpy(entry->mac, mac, RTE_ETHER_ADDR_LEN);
     entry->state = state;
-    entry->timestamp = time(NULL);
+    entry->timestamp = timestamp;
     
     /* 添加到ARP表 */
     pthread_mutex_lock(&g_arp_mutex);
     LL_ADD(entry, g_arp_table);
+    if (state == ARP_ENTRY_STATE_STATIC) {
+        g_static_entry_count++;
+        g_arp_table_dirty = 1;
+    }
     pthread_mutex_unlock(&g_arp_mutex);
     
     MYLIB_LOG(LOG_LEVEL_DEBUG, "Added ARP entry for IP %u.%u.%u.%u",
-            (ip & 0xFF),
-            (ip >> 8) & 0xFF,
-            (ip >> 16) & 0xFF,
-            (ip >> 24) & 0xFF);
+            (ip & 0xFF), (ip >> 8) & 0xFF,
+            (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
     return MYLIB_SUCCESS;
 }
 
@@ -96,6 +157,10 @@ void arp_remove_entry(struct arp_entry *entry) {
 
     pthread_mutex_lock(&g_arp_mutex);
     LL_REMOVE(entry, g_arp_table);
+    if (entry->state == ARP_ENTRY_STATE_STATIC) {
+        g_static_entry_count--;
+        g_arp_table_dirty = 1;
+    }
     rte_free(entry);
     pthread_mutex_unlock(&g_arp_mutex);
     
@@ -108,13 +173,14 @@ void arp_update_entry(struct arp_entry *entry, const uint8_t *mac) {
     pthread_mutex_lock(&g_arp_mutex);
     rte_memcpy(entry->mac, mac, RTE_ETHER_ADDR_LEN);
     entry->timestamp = time(NULL);
+    if (entry->state == ARP_ENTRY_STATE_STATIC) {
+        g_arp_table_dirty = 1;
+    }
     pthread_mutex_unlock(&g_arp_mutex);
     
-    MYLIB_LOG(LOG_LEVEL_DEBUG, "Updated ARP entry for IP %u.%u.%u.%u", 
-            (entry->ip & 0xFF),
-            (entry->ip >> 8) & 0xFF,
-            (entry->ip >> 16) & 0xFF,
-            (entry->ip >> 24) & 0xFF);
+    MYLIB_LOG(LOG_LEVEL_DEBUG, "Updated ARP entry for IP %u.%u.%u.%u",
+            (entry->ip & 0xFF), (entry->ip >> 8) & 0xFF,
+            (entry->ip >> 16) & 0xFF, (entry->ip >> 24) & 0xFF);
 }
 
 mylib_error_t arp_queue_packet(uint32_t ip, struct rte_mbuf *mbuf) {
@@ -310,7 +376,8 @@ mylib_error_t arp_process_packet(struct rte_mbuf *mbuf) {
                     /* 添加新表项 */
                     arp_add_entry(arp_hdr->arp_data.arp_sip,
                                 arp_hdr->arp_data.arp_sha.addr_bytes,
-                                ARP_ENTRY_STATE_DYNAMIC);
+                                ARP_ENTRY_STATE_DYNAMIC,
+                                time(NULL));
                 }
                 
                 /* 处理等待该IP的数据包 */
@@ -352,9 +419,18 @@ mylib_error_t arp_process_packet(struct rte_mbuf *mbuf) {
 }
 
 void arp_timer_handler(void) {
+    static time_t last_save = 0;
+    time_t now = time(NULL);
+    
+    /* 定期保存ARP表 */
+    if (now - last_save >= ARP_TABLE_SAVE_INTERVAL) {
+        arp_save_table();
+        last_save = now;
+    }
+    
     pthread_mutex_lock(&g_arp_mutex);
     
-    time_t now = time(NULL);
+    time_t now_local = time(NULL);
     struct arp_entry *entry = g_arp_table;
     
     while (entry) {
@@ -362,7 +438,7 @@ void arp_timer_handler(void) {
         
         /* 检查动态表项是否超时 */
         if (entry->state == ARP_ENTRY_STATE_DYNAMIC &&
-            now - entry->timestamp >= ARP_ENTRY_TIMEOUT) {
+            now_local - entry->timestamp >= ARP_ENTRY_TIMEOUT) {
             LL_REMOVE(entry, g_arp_table);
             rte_free(entry);
         }
@@ -374,4 +450,156 @@ void arp_timer_handler(void) {
     
     /* 处理等待中的ARP请求 */
     arp_process_pending_requests();
+}
+
+/* 保存ARP表到文件 */
+mylib_error_t arp_save_table(void) {
+    /* 如果没有静态条目或数据未修改，直接返回 */
+    if (g_static_entry_count == 0 || !g_arp_table_dirty) {
+        return MYLIB_SUCCESS;
+    }
+
+    char tmp_file[PATH_MAX];
+    FILE *fp;
+    struct arp_entry *entry;
+    time_t start_time = time(NULL);
+    
+    snprintf(tmp_file, sizeof(tmp_file), "%s.tmp", ARP_TABLE_FILE);
+    
+    fp = fopen(tmp_file, "w");
+    if (!fp) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to open %s: %s", 
+                 tmp_file, strerror(errno));
+        return MYLIB_ERROR_IO;
+    }
+    
+    /* 设置文件权限 */
+    fchmod(fileno(fp), ARP_TABLE_FILE_MODE);
+    
+    /* 写入版本信息 */
+    if (fprintf(fp, "#VERSION=%d\n", ARP_TABLE_VERSION) < 0) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to write version: %s", strerror(errno));
+        fclose(fp);
+        remove(tmp_file);
+        return MYLIB_ERROR_IO;
+    }
+    
+    /* 写入ARP表项 */
+    int saved = 0;
+    pthread_mutex_lock(&g_arp_mutex);
+    for (entry = g_arp_table; entry != NULL; entry = entry->next) {
+        if (entry->state == ARP_ENTRY_STATE_STATIC) {
+            if (fprintf(fp, "%u,%02x:%02x:%02x:%02x:%02x:%02x,%u,%ld\n",
+                    entry->ip,
+                    entry->mac[0], entry->mac[1], entry->mac[2],
+                    entry->mac[3], entry->mac[4], entry->mac[5],
+                    entry->state,
+                    entry->timestamp) < 0) {
+                pthread_mutex_unlock(&g_arp_mutex);
+                MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to write entry: %s", 
+                         strerror(errno));
+                fclose(fp);
+                remove(tmp_file);
+                return MYLIB_ERROR_IO;
+            }
+            saved++;
+        }
+    }
+    pthread_mutex_unlock(&g_arp_mutex);
+    
+    /* 确保数据写入磁盘 */
+    if (fflush(fp) != 0 || fsync(fileno(fp)) != 0) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to flush data: %s", strerror(errno));
+        fclose(fp);
+        remove(tmp_file);
+        return MYLIB_ERROR_IO;
+    }
+    fclose(fp);
+    
+    /* 原子替换文件 */
+    if (rename(tmp_file, ARP_TABLE_FILE) != 0) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to rename %s to %s: %s",
+                 tmp_file, ARP_TABLE_FILE, strerror(errno));
+        remove(tmp_file);
+        return MYLIB_ERROR_IO;
+    }
+    
+    g_arp_table_dirty = 0;
+    
+    MYLIB_LOG(LOG_LEVEL_INFO, 
+             "Saved %d ARP entries (took %ld seconds)",
+             saved, time(NULL) - start_time);
+    return MYLIB_SUCCESS;
+}
+
+/* 从文件加载ARP表 */
+mylib_error_t arp_load_table(void) {
+    FILE *fp;
+    char line[256];
+    uint32_t ip;
+    uint8_t mac[RTE_ETHER_ADDR_LEN];
+    uint8_t state;
+    time_t timestamp;
+    int loaded = 0, line_num = 0;
+    int version = 0;
+    time_t start_time = time(NULL);
+    
+    mylib_error_t ret = create_arp_directory();
+    if (ret != MYLIB_SUCCESS) {
+        return ret;
+    }
+    
+    fp = fopen(ARP_TABLE_FILE, "r");
+    if (!fp) {
+        if (errno == ENOENT) {
+            MYLIB_LOG(LOG_LEVEL_INFO, "No ARP table file found");
+            return MYLIB_SUCCESS;
+        }
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to open %s: %s",
+                 ARP_TABLE_FILE, strerror(errno));
+        return MYLIB_ERROR_IO;
+    }
+    
+    /* 读取版本信息 */
+    line_num++;
+    if (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "#VERSION=%d", &version) != 1 || 
+            version != ARP_TABLE_VERSION) {
+            MYLIB_LOG(LOG_LEVEL_ERROR, 
+                     "Invalid version at line %d: %s", line_num, line);
+            fclose(fp);
+            return MYLIB_ERROR_INVALID;
+        }
+    }
+    
+    /* 读取表项 */
+    while (fgets(line, sizeof(line), fp)) {
+        line_num++;
+        char mac_str[18];
+        if (sscanf(line, "%u,%17s,%hhu,%ld",
+                   &ip, mac_str, &state, &timestamp) == 4) {
+            
+            /* 解析MAC地址 */
+            if (parse_mac_address(mac_str, mac) != 0) {
+                MYLIB_LOG(LOG_LEVEL_WARNING, 
+                         "Invalid MAC at line %d: %s", line_num, mac_str);
+                continue;
+            }
+            
+            /* 添加表项 */
+            if (arp_add_entry(ip, mac, state, timestamp) == MYLIB_SUCCESS) {
+                loaded++;
+            }
+        } else {
+            MYLIB_LOG(LOG_LEVEL_WARNING, 
+                     "Invalid format at line %d: %s", line_num, line);
+        }
+    }
+    
+    fclose(fp);
+    
+    MYLIB_LOG(LOG_LEVEL_INFO, 
+             "Loaded %d ARP entries (took %ld seconds)",
+             loaded, time(NULL) - start_time);
+    return MYLIB_SUCCESS;
 } 

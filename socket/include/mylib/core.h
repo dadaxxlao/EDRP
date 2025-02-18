@@ -22,7 +22,8 @@ typedef enum {
     MYLIB_ERROR_INUSE = -3,
     MYLIB_ERROR_TIMEOUT = -4,
     MYLIB_ERROR_BIND = -5,
-    MYLIB_ERROR_SEND = -6
+    MYLIB_ERROR_SEND = -6,
+    MYLIB_ERROR_IO = -7
 } mylib_error_t;
 
 /* 配置选项 */

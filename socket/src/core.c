@@ -11,6 +11,7 @@
 #include "internal/tcp_impl.h"
 #include "internal/udp_impl.h"
 #include "internal/arp_impl.h"
+#include "internal/icmp_impl.h"
 
 /* 全局变量定义 */
 static struct mylib_config *g_config = NULL;
@@ -415,6 +416,9 @@ static mylib_error_t process_ip_packet(struct rte_mbuf *mbuf) {
     
     /* 根据协议类型分发 */
     switch (ip_hdr->next_proto_id) {
+        case IPPROTO_ICMP:
+            return icmp_process_packet(mbuf);
+            
         case IPPROTO_UDP:
             return udp_process_packet(mbuf);
             

@@ -8,7 +8,8 @@ sources = [
   'src/rings.c',
   'src/dpdk_init.c',
   'src/fd_manager.c',
-  'src/socket_api.c'
+  'src/socket_api.c',
+  'src/icmp.c'
 ]
 
 # 头文件目录
