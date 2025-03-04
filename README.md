@@ -50,11 +50,27 @@ sudo ./setup_dpdk.sh -n ens32:0000:02:02.0 -p 1024
 ### 3. 编译项目
 
 ```bash
-# 在项目根目录下执行
-make
+# 在项目根目录下执行配置
+meson setup builddir
+
+# 编译项目
+cd builddir
+ninja
+
+# 或者直接使用一条命令
+ninja -C builddir
 ```
 
-编译后的可执行文件将生成在 `build` 目录下。
+编译后的可执行文件将生成在 `builddir` 目录下。您可以使用以下命令运行示例程序：
+
+```bash
+# 运行UDP示例
+./builddir/examples/basic/udp_example
+
+# 运行TCP示例
+./builddir/examples/basic/tcp_example -s  # 服务器模式
+./builddir/examples/basic/tcp_example -c <IP地址>  # 客户端模式
+```
 
 ## 项目结构
 
