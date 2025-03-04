@@ -217,23 +217,78 @@ mylib_error_t mylib_close(socket_handle_t handle) {
     struct mylib_socket *sock = (struct mylib_socket *)handle;
     
     if (!g_initialized || !sock) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Invalid socket handle in close");
         return MYLIB_ERROR_INVALID;
     }
 
-    /* 在释放之前保存需要的信息 */
-    int fd = sock->fd;
-
-    /* 释放资源 */
-    if (sock->send_buf) rte_ring_free(sock->send_buf);
-    if (sock->recv_buf) rte_ring_free(sock->recv_buf);
+    /* 根据协议类型处理 */
+    if (sock->protocol == MYLIB_PROTO_UDP) {
+        /* 处理UDP socket */
+        pthread_mutex_lock(&g_udp_mutex);
+        struct udp_control_block *ucb = udp_find_ucb(sock->local_ip, sock->local_port);
+        if (ucb) {
+            udp_destroy_ucb(ucb);
+        }
+        pthread_mutex_unlock(&g_udp_mutex);
+    } else if (sock->protocol == MYLIB_PROTO_TCP) {
+        /* 处理TCP socket */
+        pthread_mutex_lock(&g_tcp_mutex);
+        struct tcp_control_block *tcb = tcp_find_tcb(sock->local_ip, sock->local_port);
+        if (tcb) {
+            /* 发起主动关闭 */
+            tcp_close(tcb);
+            
+            /* 如果是阻塞模式，等待连接关闭完成 */
+            if (!sock->non_blocking) {
+                pthread_mutex_lock(&sock->mutex);
+                /* 等待状态转换为CLOSED或TIME_WAIT */
+                while (tcb->state != TCP_STATE_CLOSED && 
+                       tcb->state != TCP_STATE_TIME_WAIT) {
+                    pthread_mutex_unlock(&g_tcp_mutex);  // 暂时释放TCP锁防止死锁
+                    pthread_cond_wait(&sock->cond, &sock->mutex);
+                    pthread_mutex_lock(&g_tcp_mutex);    // 重新获取TCP锁
+                }
+                pthread_mutex_unlock(&sock->mutex);
+            }
+            
+            /* 如果连接已关闭，则销毁TCB */
+            if (tcb->state == TCP_STATE_CLOSED) {
+                tcp_destroy_tcb(tcb);
+            }
+            /* 对于TIME_WAIT状态，我们保留TCB，直到超时后清理 */
+        }
+        pthread_mutex_unlock(&g_tcp_mutex);
+    }
     
+    /* 清理socket资源 */
+    if (sock->send_buf) {
+        /* 清空发送缓冲区 */
+        void *data;
+        while (rte_ring_sc_dequeue(sock->send_buf, &data) == 0) {
+            rte_free(data);
+        }
+        rte_ring_free(sock->send_buf);
+    }
+    
+    if (sock->recv_buf) {
+        /* 清空接收缓冲区 */
+        void *data;
+        while (rte_ring_sc_dequeue(sock->recv_buf, &data) == 0) {
+            rte_free(data);
+        }
+        rte_ring_free(sock->recv_buf);
+    }
+    
+    /* 销毁同步原语 */
     pthread_mutex_destroy(&sock->mutex);
     pthread_cond_destroy(&sock->cond);
     
-    release_fd(fd);
+    /* 释放文件描述符 */
+    release_fd(sock->fd);
+    
+    /* 释放socket结构体 */
     rte_free(sock);
-
-    MYLIB_LOG(LOG_LEVEL_DEBUG, "Closed socket fd=%d", fd);
+    
     return MYLIB_SUCCESS;
 }
 

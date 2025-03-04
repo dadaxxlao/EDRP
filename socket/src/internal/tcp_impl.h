@@ -52,6 +52,8 @@ struct tcp_segment {
     uint16_t window;     /* 窗口大小 */
     uint8_t *data;       /* 数据指针 */
     uint16_t length;     /* 数据长度 */
+    uint32_t src_ip;     /* 源IP地址 */
+    uint16_t src_port;   /* 源端口 */
 };
 
 /* 函数声明 */
@@ -69,5 +71,11 @@ void tcp_destroy_tcb(struct tcp_control_block *tcb);
 /* 查找和接受连接相关的函数 */
 struct tcp_control_block *tcp_find_tcb(uint32_t local_ip, uint16_t local_port);
 struct tcp_control_block *tcp_get_accept_tcb(uint16_t listen_port);
+
+/* 主动发起TCP连接 */
+mylib_error_t tcp_connect(struct tcp_control_block *tcb, uint32_t dst_ip, uint16_t dst_port);
+
+/* 主动关闭TCP连接 */
+mylib_error_t tcp_close(struct tcp_control_block *tcb);
 
 #endif /* MYLIB_INTERNAL_TCP_IMPL_H */  

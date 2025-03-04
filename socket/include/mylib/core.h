@@ -60,6 +60,7 @@ void mylib_cleanup(void);
 socket_handle_t mylib_socket(int domain, int type, int protocol);
 mylib_error_t mylib_bind(socket_handle_t sock, const struct sockaddr* addr, socklen_t addrlen);
 mylib_error_t mylib_listen(socket_handle_t sock, int backlog);
+mylib_error_t mylib_connect(socket_handle_t handle, const struct sockaddr* addr, socklen_t addrlen);
 socket_handle_t mylib_accept(socket_handle_t sock, struct sockaddr* addr, socklen_t* addrlen);
 ssize_t mylib_send(socket_handle_t sock, const void* buf, size_t len, int flags);
 ssize_t mylib_recv(socket_handle_t sock, void* buf, size_t len, int flags);

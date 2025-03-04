@@ -411,4 +411,76 @@ ssize_t mylib_recv(socket_handle_t handle, void* buf, size_t len, int flags) {
 
     rte_free(data);
     return copy_len;
+}
+
+mylib_error_t mylib_connect(socket_handle_t handle, const struct sockaddr* addr, socklen_t addrlen) {
+    /* 检查参数 */
+    struct mylib_socket *sock = (struct mylib_socket *)handle;
+    
+    if (!sock || !addr || addrlen < sizeof(struct sockaddr_in)) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Invalid parameters for connect");
+        return MYLIB_ERROR_INVALID;
+    }
+    
+    /* 检查协议类型 */
+    if (sock->protocol != MYLIB_PROTO_TCP) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "Socket protocol is not TCP");
+        return MYLIB_ERROR_INVALID;
+    }
+    
+    /* 获取目的地址 */
+    const struct sockaddr_in *dest = (const struct sockaddr_in *)addr;
+    uint32_t dst_ip = dest->sin_addr.s_addr;
+    uint16_t dst_port = dest->sin_port;
+    
+    /* 查找对应的TCB */
+    pthread_mutex_lock(&g_tcp_mutex);
+    struct tcp_control_block *tcb = tcp_find_tcb(sock->local_ip, sock->local_port);
+    
+    if (!tcb) {
+        /* 未找到TCB，可能是socket尚未绑定 */
+        if (sock->local_port == 0) {
+            /* 分配临时端口 */
+            uint16_t port = 0;
+            do {
+                port = 1024 + (rand() % (65535 - 1024)); // 随机选择一个临时端口
+            } while (check_port_in_use(port));
+            
+            sock->local_port = port;
+            
+            /* 创建新的TCB */
+            tcb = tcp_create_tcb(sock);
+            if (!tcb) {
+                pthread_mutex_unlock(&g_tcp_mutex);
+                MYLIB_LOG(LOG_LEVEL_ERROR, "Failed to create TCP control block");
+                return MYLIB_ERROR_NOMEM;
+            }
+        } else {
+            pthread_mutex_unlock(&g_tcp_mutex);
+            MYLIB_LOG(LOG_LEVEL_ERROR, "Cannot find TCB for socket");
+            return MYLIB_ERROR_INVALID;
+        }
+    }
+    
+    /* 发起连接 */
+    mylib_error_t ret = tcp_connect(tcb, dst_ip, dst_port);
+    pthread_mutex_unlock(&g_tcp_mutex);
+    
+    /* 如果是阻塞模式，等待连接完成 */
+    if (ret == MYLIB_SUCCESS && !sock->non_blocking) {
+        pthread_mutex_lock(&sock->mutex);
+        while (tcb->state != TCP_STATE_ESTABLISHED && 
+               tcb->state != TCP_STATE_CLOSED) {
+            pthread_cond_wait(&sock->cond, &sock->mutex);
+        }
+        
+        /* 检查连接是否成功 */
+        if (tcb->state != TCP_STATE_ESTABLISHED) {
+            ret = MYLIB_ERROR_CONN;
+        }
+        
+        pthread_mutex_unlock(&sock->mutex);
+    }
+    
+    return ret;
 } 

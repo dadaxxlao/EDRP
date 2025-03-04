@@ -122,6 +122,8 @@ mylib_error_t tcp_process_packet(struct rte_mbuf *mbuf) {
     seg.ack = ntohl(tcp_hdr->recv_ack);
     seg.flags = tcp_hdr->tcp_flags;
     seg.window = ntohs(tcp_hdr->rx_win);
+    seg.src_ip = ip_hdr->src_addr;     // 添加源IP
+    seg.src_port = tcp_hdr->src_port;  // 添加源端口
     
     /* 计算数据长度 */
     uint16_t tcp_len = ntohs(ip_hdr->total_length) - sizeof(struct rte_ipv4_hdr);
@@ -235,10 +237,111 @@ struct rte_mbuf *tcp_create_packet(struct tcp_control_block *tcb,
 }
 
 void tcp_input(struct tcp_control_block *tcb, struct tcp_segment *seg) {
+    /* 断开连接标志 */
+    int close_connection = 0;
+    
+    MYLIB_LOG(LOG_LEVEL_DEBUG, "TCP状态机处理: 当前状态=%d, 标志=%04x, seq=%u, ack=%u", 
+              tcb->state, seg->flags, seg->seq, seg->ack);
+
+    /* 处理RST标志 */
+    if (seg->flags & RTE_TCP_RST_FLAG) {
+        /* 收到RST，直接关闭连接 */
+        MYLIB_LOG(LOG_LEVEL_INFO, "收到RST标志，关闭连接");
+        tcb->state = TCP_STATE_CLOSED;
+        
+        /* 通知应用层连接已断开 */
+        pthread_mutex_lock(&tcb->sock->mutex);
+        pthread_cond_signal(&tcb->sock->cond);
+        pthread_mutex_unlock(&tcb->sock->mutex);
+        
+        return;
+    }
+
+    /* 根据当前状态处理TCP段 */
     switch (tcb->state) {
+        case TCP_STATE_CLOSED:
+            /* 关闭状态，收到任何数据包都回复RST */
+            if (!(seg->flags & RTE_TCP_RST_FLAG)) {
+                struct tcp_segment rst;
+                memset(&rst, 0, sizeof(rst));
+                rst.seq = 0;
+                if (seg->flags & RTE_TCP_ACK_FLAG) {
+                    rst.seq = seg->ack;
+                }
+                rst.ack = 0;
+                rst.flags = RTE_TCP_RST_FLAG;
+                if (!(seg->flags & RTE_TCP_ACK_FLAG)) {
+                    rst.flags |= RTE_TCP_ACK_FLAG;
+                    rst.ack = seg->seq + seg->length + ((seg->flags & RTE_TCP_SYN_FLAG) ? 1 : 0);
+                }
+                rst.window = 0;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &rst);
+                if (mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, mbuf);
+                }
+            }
+            break;
+            
         case TCP_STATE_LISTEN:
             if (seg->flags & RTE_TCP_SYN_FLAG) {
                 /* 收到SYN，进入SYN_RCVD状态 */
+                tcb->state = TCP_STATE_SYN_RCVD;
+                tcb->rcv_nxt = seg->seq + 1;
+                /* 生成初始序列号 */
+                tcb->snd_nxt = (uint32_t)time(NULL); // 简单使用时间作为初始序列号
+                tcb->remote_ip = seg->src_ip;       // 需要修改struct tcp_segment，添加src_ip字段
+                tcb->remote_port = seg->src_port;   // 需要修改struct tcp_segment，添加src_port字段
+                
+                /* 发送SYN+ACK */
+                struct tcp_segment reply;
+                memset(&reply, 0, sizeof(reply));
+                reply.seq = tcb->snd_nxt;
+                reply.ack = tcb->rcv_nxt;
+                reply.flags = RTE_TCP_SYN_FLAG | RTE_TCP_ACK_FLAG;
+                reply.window = tcb->window;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &reply);
+                if (mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, mbuf);
+                    tcb->snd_nxt++; // SYN占用一个序列号
+                }
+                
+                MYLIB_LOG(LOG_LEVEL_INFO, "从LISTEN转换到SYN_RCVD状态");
+            }
+            break;
+            
+        case TCP_STATE_SYN_SENT:
+            if ((seg->flags & (RTE_TCP_SYN_FLAG | RTE_TCP_ACK_FLAG)) == (RTE_TCP_SYN_FLAG | RTE_TCP_ACK_FLAG)) {
+                /* 收到SYN+ACK，检查ACK是否确认我们发送的SYN */
+                if (seg->ack == tcb->snd_nxt) {
+                    /* 更新状态为ESTABLISHED */
+                    tcb->state = TCP_STATE_ESTABLISHED;
+                    tcb->snd_una = seg->ack;
+                    tcb->rcv_nxt = seg->seq + 1;
+                    
+                    /* 发送ACK */
+                    struct tcp_segment ack;
+                    memset(&ack, 0, sizeof(ack));
+                    ack.seq = tcb->snd_una;
+                    ack.ack = tcb->rcv_nxt;
+                    ack.flags = RTE_TCP_ACK_FLAG;
+                    ack.window = tcb->window;
+                    
+                    struct rte_mbuf *mbuf = tcp_create_packet(tcb, &ack);
+                    if (mbuf) {
+                        rte_ring_mp_enqueue(g_out_ring, mbuf);
+                    }
+                    
+                    /* 通知应用层连接已建立 */
+                    pthread_mutex_lock(&tcb->sock->mutex);
+                    pthread_cond_signal(&tcb->sock->cond);
+                    pthread_mutex_unlock(&tcb->sock->mutex);
+                    
+                    MYLIB_LOG(LOG_LEVEL_INFO, "从SYN_SENT转换到ESTABLISHED状态");
+                }
+            } else if (seg->flags & RTE_TCP_SYN_FLAG) {
+                /* 仅收到SYN，进入SYN_RCVD状态 */
                 tcb->state = TCP_STATE_SYN_RCVD;
                 tcb->rcv_nxt = seg->seq + 1;
                 
@@ -254,33 +357,99 @@ void tcp_input(struct tcp_control_block *tcb, struct tcp_segment *seg) {
                 if (mbuf) {
                     rte_ring_mp_enqueue(g_out_ring, mbuf);
                 }
+                
+                MYLIB_LOG(LOG_LEVEL_INFO, "从SYN_SENT转换到SYN_RCVD状态");
             }
             break;
             
         case TCP_STATE_SYN_RCVD:
             if (seg->flags & RTE_TCP_ACK_FLAG) {
                 /* 收到ACK，进入ESTABLISHED状态 */
-                tcb->state = TCP_STATE_ESTABLISHED;
-                tcb->snd_una = seg->ack;
-                
-                /* 通知应用层连接已建立 */
-                pthread_mutex_lock(&tcb->sock->mutex);
-                pthread_cond_signal(&tcb->sock->cond);
-                pthread_mutex_unlock(&tcb->sock->mutex);
+                if (seg->ack == tcb->snd_nxt) {
+                    tcb->state = TCP_STATE_ESTABLISHED;
+                    tcb->snd_una = seg->ack;
+                    
+                    /* 通知应用层连接已建立 */
+                    pthread_mutex_lock(&tcb->sock->mutex);
+                    pthread_cond_signal(&tcb->sock->cond);
+                    pthread_mutex_unlock(&tcb->sock->mutex);
+                    
+                    MYLIB_LOG(LOG_LEVEL_INFO, "从SYN_RCVD转换到ESTABLISHED状态");
+                    
+                    /* 处理可能的数据 */
+                    if (seg->length > 0) {
+                        goto process_established;
+                    }
+                }
             }
             break;
             
         case TCP_STATE_ESTABLISHED:
+process_established:
             /* 处理数据 */
             if (seg->length > 0) {
+                /* 检查序列号是否匹配 */
+                if (seg->seq != tcb->rcv_nxt) {
+                    /* 序列号不匹配，发送ACK */
+                    struct tcp_segment ack;
+                    memset(&ack, 0, sizeof(ack));
+                    ack.seq = tcb->snd_nxt;
+                    ack.ack = tcb->rcv_nxt;
+                    ack.flags = RTE_TCP_ACK_FLAG;
+                    ack.window = tcb->window;
+                    
+                    struct rte_mbuf *mbuf = tcp_create_packet(tcb, &ack);
+                    if (mbuf) {
+                        rte_ring_mp_enqueue(g_out_ring, mbuf);
+                    }
+                    
+                    MYLIB_LOG(LOG_LEVEL_WARNING, "收到非预期序列号：预期=%u，实际=%u", 
+                             tcb->rcv_nxt, seg->seq);
+                    break;
+                }
+                
                 /* 将数据放入接收缓冲区 */
-                rte_ring_mp_enqueue(tcb->sock->recv_buf, seg->data);
+                void *data = rte_malloc("tcp_data", seg->length, 0);
+                if (data) {
+                    rte_memcpy(data, seg->data, seg->length);
+                    if (rte_ring_mp_enqueue(tcb->sock->recv_buf, data) < 0) {
+                        rte_free(data);
+                    } else {
+                        /* 通知应用层有数据到达 */
+                        pthread_mutex_lock(&tcb->sock->mutex);
+                        pthread_cond_signal(&tcb->sock->cond);
+                        pthread_mutex_unlock(&tcb->sock->mutex);
+                    }
+                }
+                
+                /* 更新接收序列号 */
+                tcb->rcv_nxt += seg->length;
                 
                 /* 发送ACK */
                 struct tcp_segment ack;
                 memset(&ack, 0, sizeof(ack));
                 ack.seq = tcb->snd_nxt;
-                ack.ack = tcb->rcv_nxt + seg->length;
+                ack.ack = tcb->rcv_nxt;
+                ack.flags = RTE_TCP_ACK_FLAG;
+                ack.window = tcb->window;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &ack);
+                if (mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, mbuf);
+                }
+            }
+            
+            /* 处理FIN标志 */
+            if (seg->flags & RTE_TCP_FIN_FLAG) {
+                /* 远端要求关闭连接 */
+                tcb->rcv_nxt++; // FIN占用一个序列号
+                tcb->state = TCP_STATE_CLOSE_WAIT;
+                
+                /* 发送ACK确认FIN */
+                struct tcp_segment ack;
+                memset(&ack, 0, sizeof(ack));
+                ack.seq = tcb->snd_nxt;
+                ack.ack = tcb->rcv_nxt;
                 ack.flags = RTE_TCP_ACK_FLAG;
                 ack.window = tcb->window;
                 
@@ -289,12 +458,231 @@ void tcp_input(struct tcp_control_block *tcb, struct tcp_segment *seg) {
                     rte_ring_mp_enqueue(g_out_ring, mbuf);
                 }
                 
-                tcb->rcv_nxt += seg->length;
+                /* 通知应用层对方关闭连接 */
+                pthread_mutex_lock(&tcb->sock->mutex);
+                pthread_cond_signal(&tcb->sock->cond);
+                pthread_mutex_unlock(&tcb->sock->mutex);
+                
+                MYLIB_LOG(LOG_LEVEL_INFO, "从ESTABLISHED转换到CLOSE_WAIT状态");
             }
             break;
             
-        default:
+        case TCP_STATE_FIN_WAIT_1:
+            /* 处理ACK */
+            if (seg->flags & RTE_TCP_ACK_FLAG) {
+                if (seg->ack == tcb->snd_nxt) {
+                    /* 我们的FIN被确认 */
+                    tcb->snd_una = seg->ack;
+                    
+                    /* 检查是否也收到FIN */
+                    if (seg->flags & RTE_TCP_FIN_FLAG) {
+                        /* 收到对方的FIN */
+                        tcb->rcv_nxt = seg->seq + 1;
+                        tcb->state = TCP_STATE_TIME_WAIT;
+                        
+                        /* 发送ACK确认FIN */
+                        struct tcp_segment ack;
+                        memset(&ack, 0, sizeof(ack));
+                        ack.seq = tcb->snd_nxt;
+                        ack.ack = tcb->rcv_nxt;
+                        ack.flags = RTE_TCP_ACK_FLAG;
+                        ack.window = tcb->window;
+                        
+                        struct rte_mbuf *mbuf = tcp_create_packet(tcb, &ack);
+                        if (mbuf) {
+                            rte_ring_mp_enqueue(g_out_ring, mbuf);
+                        }
+                        
+                        /* 应启动TIME_WAIT计时器，但暂未实现 */
+                        MYLIB_LOG(LOG_LEVEL_INFO, "从FIN_WAIT_1转换到TIME_WAIT状态");
+                    } else {
+                        /* 只确认了我们的FIN，进入FIN_WAIT_2 */
+                        tcb->state = TCP_STATE_FIN_WAIT_2;
+                        MYLIB_LOG(LOG_LEVEL_INFO, "从FIN_WAIT_1转换到FIN_WAIT_2状态");
+                    }
+                }
+            }
+            /* 处理FIN（可能没有ACK） */
+            else if (seg->flags & RTE_TCP_FIN_FLAG) {
+                /* 收到对方的FIN */
+                tcb->rcv_nxt = seg->seq + 1;
+                tcb->state = TCP_STATE_CLOSING;
+                
+                /* 发送ACK确认FIN */
+                struct tcp_segment ack;
+                memset(&ack, 0, sizeof(ack));
+                ack.seq = tcb->snd_nxt;
+                ack.ack = tcb->rcv_nxt;
+                ack.flags = RTE_TCP_ACK_FLAG;
+                ack.window = tcb->window;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &ack);
+                if (mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, mbuf);
+                }
+                
+                MYLIB_LOG(LOG_LEVEL_INFO, "从FIN_WAIT_1转换到CLOSING状态");
+            }
+            
+            /* 处理数据 */
+            if (seg->length > 0) {
+                /* 将数据放入接收缓冲区 */
+                void *data = rte_malloc("tcp_data", seg->length, 0);
+                if (data) {
+                    rte_memcpy(data, seg->data, seg->length);
+                    if (rte_ring_mp_enqueue(tcb->sock->recv_buf, data) < 0) {
+                        rte_free(data);
+                    } else {
+                        /* 通知应用层有数据到达 */
+                        pthread_mutex_lock(&tcb->sock->mutex);
+                        pthread_cond_signal(&tcb->sock->cond);
+                        pthread_mutex_unlock(&tcb->sock->mutex);
+                    }
+                }
+                
+                /* 更新接收序列号 */
+                tcb->rcv_nxt += seg->length;
+                
+                /* 发送ACK */
+                struct tcp_segment ack;
+                memset(&ack, 0, sizeof(ack));
+                ack.seq = tcb->snd_nxt;
+                ack.ack = tcb->rcv_nxt;
+                ack.flags = RTE_TCP_ACK_FLAG;
+                ack.window = tcb->window;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &ack);
+                if (mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, mbuf);
+                }
+            }
             break;
+            
+        case TCP_STATE_FIN_WAIT_2:
+            /* 处理FIN */
+            if (seg->flags & RTE_TCP_FIN_FLAG) {
+                /* 收到对方的FIN */
+                tcb->rcv_nxt = seg->seq + 1;
+                tcb->state = TCP_STATE_TIME_WAIT;
+                
+                /* 发送ACK确认FIN */
+                struct tcp_segment ack;
+                memset(&ack, 0, sizeof(ack));
+                ack.seq = tcb->snd_nxt;
+                ack.ack = tcb->rcv_nxt;
+                ack.flags = RTE_TCP_ACK_FLAG;
+                ack.window = tcb->window;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &ack);
+                if (mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, mbuf);
+                }
+                
+                /* 应启动TIME_WAIT计时器，但暂未实现 */
+                MYLIB_LOG(LOG_LEVEL_INFO, "从FIN_WAIT_2转换到TIME_WAIT状态");
+            }
+            
+            /* 处理数据 */
+            if (seg->length > 0) {
+                /* 将数据放入接收缓冲区 */
+                void *data = rte_malloc("tcp_data", seg->length, 0);
+                if (data) {
+                    rte_memcpy(data, seg->data, seg->length);
+                    if (rte_ring_mp_enqueue(tcb->sock->recv_buf, data) < 0) {
+                        rte_free(data);
+                    } else {
+                        /* 通知应用层有数据到达 */
+                        pthread_mutex_lock(&tcb->sock->mutex);
+                        pthread_cond_signal(&tcb->sock->cond);
+                        pthread_mutex_unlock(&tcb->sock->mutex);
+                    }
+                }
+                
+                /* 更新接收序列号 */
+                tcb->rcv_nxt += seg->length;
+                
+                /* 发送ACK */
+                struct tcp_segment ack;
+                memset(&ack, 0, sizeof(ack));
+                ack.seq = tcb->snd_nxt;
+                ack.ack = tcb->rcv_nxt;
+                ack.flags = RTE_TCP_ACK_FLAG;
+                ack.window = tcb->window;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &ack);
+                if (mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, mbuf);
+                }
+            }
+            break;
+            
+        case TCP_STATE_CLOSING:
+            /* 处理ACK */
+            if (seg->flags & RTE_TCP_ACK_FLAG) {
+                if (seg->ack == tcb->snd_nxt) {
+                    /* 我们的FIN被确认 */
+                    tcb->snd_una = seg->ack;
+                    tcb->state = TCP_STATE_TIME_WAIT;
+                    
+                    /* 应启动TIME_WAIT计时器，但暂未实现 */
+                    MYLIB_LOG(LOG_LEVEL_INFO, "从CLOSING转换到TIME_WAIT状态");
+                }
+            }
+            break;
+            
+        case TCP_STATE_TIME_WAIT:
+            /* 在TIME_WAIT状态下收到数据包，重新发送ACK */
+            if (seg->flags & RTE_TCP_FIN_FLAG) {
+                /* 发送ACK确认FIN */
+                struct tcp_segment ack;
+                memset(&ack, 0, sizeof(ack));
+                ack.seq = tcb->snd_nxt;
+                ack.ack = tcb->rcv_nxt;
+                ack.flags = RTE_TCP_ACK_FLAG;
+                ack.window = tcb->window;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &ack);
+                if (mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, mbuf);
+                }
+                
+                /* 重置TIME_WAIT计时器，但暂未实现 */
+            }
+            break;
+            
+        case TCP_STATE_CLOSE_WAIT:
+            /* 已收到FIN并发送了ACK，等待应用层close */
+            /* 只处理数据 */
+            if (seg->length > 0) {
+                /* 在CLOSE_WAIT状态不应收到更多数据，忽略 */
+                MYLIB_LOG(LOG_LEVEL_WARNING, "在CLOSE_WAIT状态收到数据，忽略");
+            }
+            break;
+            
+        case TCP_STATE_LAST_ACK:
+            /* 处理ACK */
+            if (seg->flags & RTE_TCP_ACK_FLAG) {
+                if (seg->ack == tcb->snd_nxt) {
+                    /* 我们的FIN被确认，关闭连接 */
+                    tcb->snd_una = seg->ack;
+                    tcb->state = TCP_STATE_CLOSED;
+                    close_connection = 1;
+                    
+                    MYLIB_LOG(LOG_LEVEL_INFO, "从LAST_ACK转换到CLOSED状态");
+                }
+            }
+            break;
+    }
+    
+    /* 如果标记为关闭连接，释放TCB资源 */
+    if (close_connection) {
+        /* 通知应用层连接已关闭 */
+        pthread_mutex_lock(&tcb->sock->mutex);
+        pthread_cond_signal(&tcb->sock->cond);
+        pthread_mutex_unlock(&tcb->sock->mutex);
+        
+        /* 注意：这里不能直接销毁TCB，因为应用层可能还在使用 */
+        /* 销毁工作应该由上层调用mylib_close时完成 */
     }
 }
 
@@ -359,5 +747,127 @@ mylib_error_t tcp_handle_arp_resolution(uint32_t ip, const uint8_t *mac) {
               (ip >> 8) & 0xFF,
               (ip >> 16) & 0xFF,
               (ip >> 24) & 0xFF);
+    return MYLIB_SUCCESS;
+}
+
+mylib_error_t tcp_connect(struct tcp_control_block *tcb, uint32_t dst_ip, uint16_t dst_port) {
+    /* 设置远程地址 */
+    tcb->remote_ip = dst_ip;
+    tcb->remote_port = dst_port;
+    
+    /* 生成初始序列号 */
+    tcb->snd_nxt = (uint32_t)time(NULL); // 简单使用时间作为初始序列号
+    
+    /* 更新状态为SYN_SENT */
+    tcb->state = TCP_STATE_SYN_SENT;
+    
+    /* 发送SYN */
+    struct tcp_segment syn;
+    memset(&syn, 0, sizeof(syn));
+    syn.seq = tcb->snd_nxt;
+    syn.ack = 0;
+    syn.flags = RTE_TCP_SYN_FLAG;
+    syn.window = tcb->window;
+    
+    struct rte_mbuf *mbuf = tcp_create_packet(tcb, &syn);
+    if (!mbuf) {
+        tcb->state = TCP_STATE_CLOSED;
+        return MYLIB_ERROR_NOMEM;
+    }
+    
+    /* 将SYN数据包放入发送队列 */
+    if (rte_ring_mp_enqueue(g_out_ring, mbuf) < 0) {
+        rte_pktmbuf_free(mbuf);
+        tcb->state = TCP_STATE_CLOSED;
+        return MYLIB_ERROR_SEND;
+    }
+    
+    /* 更新序列号 */
+    tcb->snd_nxt++;  // SYN占用一个序列号
+    
+    MYLIB_LOG(LOG_LEVEL_INFO, "发送SYN，进入SYN_SENT状态");
+    return MYLIB_SUCCESS;
+}
+
+mylib_error_t tcp_close(struct tcp_control_block *tcb) {
+    /* 根据当前状态决定关闭行为 */
+    switch (tcb->state) {
+        case TCP_STATE_CLOSED:
+        case TCP_STATE_LISTEN:
+            /* 直接关闭 */
+            tcb->state = TCP_STATE_CLOSED;
+            break;
+            
+        case TCP_STATE_SYN_SENT:
+            /* 还未建立连接，直接关闭 */
+            tcb->state = TCP_STATE_CLOSED;
+            break;
+            
+        case TCP_STATE_SYN_RCVD:
+        case TCP_STATE_ESTABLISHED:
+            /* 发送FIN */
+            {
+                struct tcp_segment fin;
+                memset(&fin, 0, sizeof(fin));
+                fin.seq = tcb->snd_nxt;
+                fin.ack = tcb->rcv_nxt;
+                fin.flags = RTE_TCP_FIN_FLAG | RTE_TCP_ACK_FLAG;
+                fin.window = tcb->window;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &fin);
+                if (!mbuf) {
+                    return MYLIB_ERROR_NOMEM;
+                }
+                
+                /* 将FIN数据包放入发送队列 */
+                if (rte_ring_mp_enqueue(g_out_ring, mbuf) < 0) {
+                    rte_pktmbuf_free(mbuf);
+                    return MYLIB_ERROR_SEND;
+                }
+                
+                /* 更新序列号 */
+                tcb->snd_nxt++;  // FIN占用一个序列号
+                
+                /* 更新状态 */
+                tcb->state = TCP_STATE_FIN_WAIT_1;
+                MYLIB_LOG(LOG_LEVEL_INFO, "发送FIN，进入FIN_WAIT_1状态");
+            }
+            break;
+            
+        case TCP_STATE_CLOSE_WAIT:
+            /* 发送FIN */
+            {
+                struct tcp_segment fin;
+                memset(&fin, 0, sizeof(fin));
+                fin.seq = tcb->snd_nxt;
+                fin.ack = tcb->rcv_nxt;
+                fin.flags = RTE_TCP_FIN_FLAG | RTE_TCP_ACK_FLAG;
+                fin.window = tcb->window;
+                
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &fin);
+                if (!mbuf) {
+                    return MYLIB_ERROR_NOMEM;
+                }
+                
+                /* 将FIN数据包放入发送队列 */
+                if (rte_ring_mp_enqueue(g_out_ring, mbuf) < 0) {
+                    rte_pktmbuf_free(mbuf);
+                    return MYLIB_ERROR_SEND;
+                }
+                
+                /* 更新序列号 */
+                tcb->snd_nxt++;  // FIN占用一个序列号
+                
+                /* 更新状态 */
+                tcb->state = TCP_STATE_LAST_ACK;
+                MYLIB_LOG(LOG_LEVEL_INFO, "发送FIN，进入LAST_ACK状态");
+            }
+            break;
+            
+        default:
+            /* 其他状态不做处理，等待状态机自行转换 */
+            break;
+    }
+    
     return MYLIB_SUCCESS;
 }
