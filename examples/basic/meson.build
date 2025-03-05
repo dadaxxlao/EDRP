@@ -1,5 +1,3 @@
-project('examples', 'c')
-
 inc = include_directories('../../socket/include')
 
 # 添加UDP示例程序

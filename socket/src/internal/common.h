@@ -33,6 +33,12 @@
     item->prev = item->next = NULL;    \
 } while(0)
 
+/* TCP序列号比较宏 */
+#define SEQ_LT(a,b) ((int32_t)((a)-(b)) < 0)
+#define SEQ_LEQ(a,b) ((int32_t)((a)-(b)) <= 0)
+#define SEQ_GT(a,b) ((int32_t)((a)-(b)) > 0)
+#define SEQ_GEQ(a,b) ((int32_t)((a)-(b)) >= 0)
+
 /* 内部Socket结构定义 */
 struct mylib_socket {
     int fd;                     /* 文件描述符 */

@@ -72,7 +72,7 @@ mylib_error_t init_dpdk(void) {
     // Print MAC address using DPDK function
     char mac_buf[RTE_ETHER_ADDR_FMT_SIZE];
     rte_ether_format_addr(mac_buf, RTE_ETHER_ADDR_FMT_SIZE, (struct rte_ether_addr *)g_local_mac);
-    printf("Local MAC: %s\n", mac_buf);
+    MYLIB_LOG(LOG_LEVEL_INFO, "Local MAC: %s", mac_buf);
 
     /* 创建收发环形缓冲区 */
     if (init_rings() != MYLIB_SUCCESS) {

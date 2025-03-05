@@ -1,6 +1,6 @@
 /**
  * @file arp_impl.h
- * @brief ARP协议实现
+ * @brief ARP协议头文件
  *
  * 实现ARP协议的核心功能，包括ARP表管理、ARP请求队列管理、ARP解析回调等。
  * 基于DPDK实现高性能网络通信。
@@ -14,7 +14,7 @@
 #include <rte_arp.h>
 #include <limits.h>  
 #include "common.h"
-
+#include "tcp_impl.h" //调用tcp回调
 /* ARP表项状态 */
 #define ARP_ENTRY_STATE_DYNAMIC    0
 #define ARP_ENTRY_STATE_STATIC     1
@@ -72,7 +72,7 @@ void arp_process_pending_requests(void);
 void arp_cleanup_pending_requests(void);
 
 /* ARP解析回调函数 */
-mylib_error_t tcp_handle_arp_resolution(uint32_t ip, const uint8_t *mac);
+
 
 /* 定时器处理函数 */
 void arp_timer_handler(void);

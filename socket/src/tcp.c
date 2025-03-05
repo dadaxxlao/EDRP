@@ -18,6 +18,7 @@
 #include "internal/logging.h"
 #include "internal/common.h"
 
+
 /*---------------------------------------------------------------------------*/
 /* 全局变量定义 */
 
@@ -60,7 +61,7 @@ static void tcp_timer_manage_cb(struct rte_timer *timer, void *arg);
  * @param timer 触发的计时器
  * @param arg 用户参数
  */
-static void tcp_timer_manage_cb(__rte_unused struct rte_timer *timer, void *arg) {
+static void tcp_timer_manage_cb(__rte_unused struct rte_timer *timer, __rte_unused void *arg) {
     /* 可以添加全局计时器管理逻辑 */
     MYLIB_LOG(LOG_LEVEL_DEBUG, "TCP计时器管理回调执行");
 }
@@ -73,7 +74,7 @@ static void tcp_timer_manage_cb(__rte_unused struct rte_timer *timer, void *arg)
  * @param timer 触发的计时器
  * @param arg 用户参数
  */
-static void tcp_retransmit_timer_cb(struct rte_timer *timer, void *arg) {
+static void tcp_retransmit_timer_cb(struct rte_timer *timer,__rte_unused void *arg) {
     struct tcp_timer *tcp_timer = container_of(timer, struct tcp_timer, timer);
     struct tcp_control_block *tcb = tcp_timer->tcb;
     
@@ -124,7 +125,7 @@ static void tcp_retransmit_timer_cb(struct rte_timer *timer, void *arg) {
  * @param timer 触发的计时器
  * @param arg 用户参数
  */
-static void tcp_persist_timer_cb(struct rte_timer *timer, void *arg) {
+static void tcp_persist_timer_cb(struct rte_timer *timer,__rte_unused void *arg) {
     struct tcp_timer *tcp_timer = container_of(timer, struct tcp_timer, timer);
     struct tcp_control_block *tcb = tcp_timer->tcb;
     
@@ -171,7 +172,7 @@ static void tcp_persist_timer_cb(struct rte_timer *timer, void *arg) {
  * @param timer 触发的计时器
  * @param arg 用户参数
  */
-static void tcp_keepalive_timer_cb(struct rte_timer *timer, void *arg) {
+static void tcp_keepalive_timer_cb(struct rte_timer *timer,__rte_unused void *arg) {
     struct tcp_timer *tcp_timer = container_of(timer, struct tcp_timer, timer);
     struct tcp_control_block *tcb = tcp_timer->tcb;
     
@@ -209,7 +210,7 @@ static void tcp_keepalive_timer_cb(struct rte_timer *timer, void *arg) {
  * @param timer 触发的计时器
  * @param arg 用户参数
  */
-static void tcp_time_wait_timer_cb(struct rte_timer *timer, void *arg) {
+static void tcp_time_wait_timer_cb(struct rte_timer *timer,__rte_unused void *arg) {
     struct tcp_timer *tcp_timer = container_of(timer, struct tcp_timer, timer);
     struct tcp_control_block *tcb = tcp_timer->tcb;
     
@@ -333,11 +334,12 @@ void tcp_timer_cleanup(void) {
  * @return MYLIB_SUCCESS成功，其他错误码表示失败
  */
 mylib_error_t tcp_timer_start(struct tcp_control_block *tcb, tcp_timer_type_t type, uint64_t timeout_ns) {
-    if (type >= TCP_TIMER_MAX || !tcb) {
+    if (!tcb || type >= TCP_TIMER_MAX) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "无效的TCP计时器参数");
         return MYLIB_ERROR_INVALID;
     }
     
-    MYLIB_LOG(LOG_LEVEL_DEBUG, "启动TCP计时器，类型=%d，超时=%llu ns", type, timeout_ns);
+    MYLIB_LOG(LOG_LEVEL_DEBUG, "启动TCP计时器，类型=%d，超时=%lu ns", type, timeout_ns);
     
     struct tcp_timer *timer = &tcb->timers[type];
     timer->tcb = tcb;
@@ -391,11 +393,12 @@ void tcp_timer_stop(struct tcp_control_block *tcb, tcp_timer_type_t type) {
  * @param timeout_ns 超时时间(纳秒)
  */
 void tcp_timer_reset(struct tcp_control_block *tcb, tcp_timer_type_t type, uint64_t timeout_ns) {
-    if (type >= TCP_TIMER_MAX || !tcb) {
+    if (!tcb || type >= TCP_TIMER_MAX) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "无效的TCP计时器参数");
         return;
     }
     
-    MYLIB_LOG(LOG_LEVEL_DEBUG, "重置TCP计时器，类型=%d，超时=%llu ns", type, timeout_ns);
+    MYLIB_LOG(LOG_LEVEL_DEBUG, "重置TCP计时器，类型=%d，超时=%lu ns", type, timeout_ns);
     
     /* 计算ticks */
     uint64_t hz = rte_get_timer_hz();
@@ -421,7 +424,11 @@ void tcp_timer_reset(struct tcp_control_block *tcb, tcp_timer_type_t type, uint6
  * @param measured_rtt_ns 测量的RTT值(纳秒)
  */
 void tcp_update_rtt(struct tcp_control_block *tcb, uint64_t measured_rtt_ns) {
-    MYLIB_LOG(LOG_LEVEL_DEBUG, "更新RTT: 测量值=%llu ns", measured_rtt_ns);
+    if (!tcb) {
+        return;
+    }
+    
+    MYLIB_LOG(LOG_LEVEL_DEBUG, "更新RTT: 测量值=%lu ns", measured_rtt_ns);
     
     if (tcb->srtt == 0) {
         /* 首次测量 */
@@ -444,7 +451,7 @@ void tcp_update_rtt(struct tcp_control_block *tcb, uint64_t measured_rtt_ns) {
         tcb->rto = 60000000000ULL;
     }
     
-    MYLIB_LOG(LOG_LEVEL_DEBUG, "更新RTO: 新值=%llu ns", tcb->rto);
+    MYLIB_LOG(LOG_LEVEL_DEBUG, "更新RTO: 新值=%lu ns", tcb->rto);
 }
 
 /*===========================================================================*/
@@ -1117,11 +1124,30 @@ struct tcp_control_block *tcp_get_accept_tcb(uint16_t listen_port) {
 } 
 
 mylib_error_t tcp_handle_arp_resolution(uint32_t ip, const uint8_t *mac) {
-    MYLIB_LOG(LOG_LEVEL_DEBUG, "TCP handling ARP resolution for IP %u.%u.%u.%u", 
-              (ip & 0xFF),
-              (ip >> 8) & 0xFF,
-              (ip >> 16) & 0xFF,
-              (ip >> 24) & 0xFF);
+    /* 查找所有使用该IP的TCB */
+    pthread_mutex_lock(&g_tcp_mutex);
+    struct tcp_control_block *tcb;
+    for (tcb = g_tcb_list; tcb != NULL; tcb = tcb->next) {
+        if (tcb->remote_ip == ip) {
+            /* 如果TCB处于SYN_SENT状态且没有数据要发送，可能需要重新发送SYN */
+            if (tcb->state == TCP_STATE_SYN_SENT) {
+                MYLIB_LOG(LOG_LEVEL_DEBUG, "为处于SYN_SENT状态的连接重新发送SYN");
+                struct tcp_segment seg;
+                memset(&seg, 0, sizeof(seg));
+                seg.flags = RTE_TCP_SYN_FLAG;
+                seg.seq = tcb->snd_nxt;
+                seg.window = tcb->window;
+                
+                /* 创建并发送SYN包 */
+                struct rte_mbuf *mbuf = tcp_create_packet(tcb, &seg);
+                if (mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, mbuf);
+                }
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_tcp_mutex);
+    
     return MYLIB_SUCCESS;
 }
 
@@ -1233,6 +1259,280 @@ mylib_error_t tcp_close(struct tcp_control_block *tcb) {
             /* 已经在关闭过程中，不需要额外操作 */
             break;
     }
+    
+    return MYLIB_SUCCESS;
+}
+
+/**
+ * @brief 创建TCP数据包
+ *
+ * 根据TCP控制块和TCP段信息创建数据包
+ *
+ * @param tcb TCP控制块
+ * @param seg TCP段信息
+ * @return 创建的MBUF指针，失败返回NULL
+ */
+struct rte_mbuf *tcp_create_packet(struct tcp_control_block *tcb, struct tcp_segment *seg) {
+    if (!tcb || !seg) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "无效的TCP控制块或段信息");
+        return NULL;
+    }
+    
+    /* 计算需要的总长度 */
+    uint16_t total_length = sizeof(struct rte_ether_hdr) + 
+                           sizeof(struct rte_ipv4_hdr) + 
+                           sizeof(struct rte_tcp_hdr) + 
+                           TCP_OPTION_LENGTH + 
+                           seg->length;
+    
+    /* 分配mbuf */
+    struct rte_mbuf *mbuf = rte_pktmbuf_alloc(g_mbuf_pool);
+    if (unlikely(!mbuf)) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "无法分配mbuf用于TCP数据包");
+        return NULL;
+    }
+    
+    /* 设置mbuf长度 */
+    mbuf->data_len = total_length;
+    mbuf->pkt_len = total_length;
+    
+    /* 填充以太网头部 */
+    struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
+    
+    /* 获取目标MAC地址 */
+    struct arp_entry *arp_entry = arp_lookup(tcb->remote_ip);
+    if (arp_entry == NULL) {
+        // 触发ARP请求并暂存数据包
+        if (arp_queue_packet(tcb->remote_ip, mbuf) == MYLIB_SUCCESS) {
+            MYLIB_LOG(LOG_LEVEL_DEBUG, "已排队TCP数据包等待ARP解析");
+            return NULL; // 不要释放mbuf，已加入队列
+        } else {
+            rte_pktmbuf_free(mbuf);
+            return NULL;
+        }
+    }
+    
+    /* 填充以太网头部 */
+    memcpy(&eth_hdr->dst_addr, arp_entry->mac, RTE_ETHER_ADDR_LEN);
+    memcpy(&eth_hdr->src_addr, g_local_mac, RTE_ETHER_ADDR_LEN);
+    eth_hdr->ether_type = htons(RTE_ETHER_TYPE_IPV4);
+    
+    /* 填充IP头部 */
+    struct rte_ipv4_hdr *ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+    ip_hdr->version_ihl = (4 << 4) | 5; /* IPv4, 5 * 32位字 */
+    ip_hdr->type_of_service = 0;
+    ip_hdr->total_length = htons(total_length - sizeof(struct rte_ether_hdr));
+    ip_hdr->packet_id = 0; /* 让内核填充 */
+    ip_hdr->fragment_offset = 0;
+    ip_hdr->time_to_live = 64; /* 默认TTL */
+    ip_hdr->next_proto_id = IPPROTO_TCP;
+    ip_hdr->hdr_checksum = 0; /* 稍后计算 */
+    ip_hdr->src_addr = htonl(g_local_ip);
+    ip_hdr->dst_addr = htonl(tcb->remote_ip);
+    
+    /* 计算IP校验和 */
+    ip_hdr->hdr_checksum = rte_ipv4_cksum(ip_hdr);
+    
+    /* 填充TCP头部 */
+    struct rte_tcp_hdr *tcp_hdr = (struct rte_tcp_hdr *)(ip_hdr + 1);
+    tcp_hdr->src_port = htons(tcb->sock->local_port);
+    tcp_hdr->dst_port = htons(tcb->remote_port);
+    tcp_hdr->sent_seq = htonl(seg->seq);
+    tcp_hdr->recv_ack = htonl(seg->ack);
+    tcp_hdr->data_off = (sizeof(struct rte_tcp_hdr) + TCP_OPTION_LENGTH) / 4 << 4; /* 数据偏移，单位是4字节 */
+    tcp_hdr->tcp_flags = seg->flags;
+    tcp_hdr->rx_win = htons(seg->window);
+    tcp_hdr->cksum = 0; /* 稍后计算 */
+    tcp_hdr->tcp_urp = 0;
+    
+    /* 填充TCP选项 */
+    uint8_t *options = (uint8_t *)(tcp_hdr + 1);
+    
+    /* MSS选项 */
+    options[0] = 2; /* 选项类型：MSS */
+    options[1] = 4; /* 选项长度 */
+    uint16_t mss = htons(1460); /* 标准以太网MSS */
+    memcpy(&options[2], &mss, sizeof(mss));
+    
+    /* 窗口缩放选项 */
+    options[4] = 3; /* 选项类型：窗口缩放 */
+    options[5] = 3; /* 选项长度 */
+    options[6] = 7; /* 缩放因子 */
+    
+    /* 时间戳选项 */
+    options[7] = 8; /* 选项类型：时间戳 */
+    options[8] = 10; /* 选项长度 */
+    uint32_t timestamp = htonl((uint32_t)time(NULL));
+    memcpy(&options[9], &timestamp, sizeof(timestamp));
+    uint32_t timestamp_echo = 0; /* 回显时间戳 */
+    memcpy(&options[13], &timestamp_echo, sizeof(timestamp_echo));
+    
+    /* 填充数据 */
+    if (seg->length > 0 && seg->data) {
+        uint8_t *data = (uint8_t *)(tcp_hdr + 1) + TCP_OPTION_LENGTH;
+        memcpy(data, seg->data, seg->length);
+    }
+    
+    /* 计算TCP校验和 */
+    tcp_hdr->cksum = rte_ipv4_udptcp_cksum(ip_hdr, tcp_hdr);
+    
+    MYLIB_LOG(LOG_LEVEL_DEBUG, "创建TCP数据包: 源端口=%u, 目标端口=%u, 标志=0x%02X, 长度=%u",
+             tcb->sock->local_port, tcb->remote_port, seg->flags, total_length);
+    
+    return mbuf;
+}
+
+/**
+ * @brief 处理接收到的TCP数据包
+ *
+ * 从MBUF中提取TCP数据，根据TCP控制块状态进行处理
+ *
+ * @param mbuf 包含TCP数据的MBUF
+ * @return MYLIB_SUCCESS成功，其他错误码表示失败
+ */
+mylib_error_t tcp_process_packet(struct rte_mbuf *mbuf) {
+    if (unlikely(!mbuf)) {
+        MYLIB_LOG(LOG_LEVEL_ERROR, "无效的MBUF指针");
+        return MYLIB_ERROR_INVALID;
+    }
+    
+    /* 获取以太网头部 */
+    struct rte_ether_hdr *eth_hdr = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
+    
+    /* 获取IP头部 */
+    struct rte_ipv4_hdr *ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+    
+    /* 验证IP头部 */
+    if (unlikely(ip_hdr->next_proto_id != IPPROTO_TCP)) {
+        MYLIB_LOG(LOG_LEVEL_WARNING, "非TCP协议包");
+        return MYLIB_ERROR_INVALID;
+    }
+    
+    /* 获取TCP头部 */
+    struct rte_tcp_hdr *tcp_hdr = (struct rte_tcp_hdr *)((uint8_t *)ip_hdr + 
+                                                       ((ip_hdr->version_ihl & 0x0F) * 4));
+    
+    /* 验证TCP头部长度 */
+    uint8_t tcp_hdr_len = (tcp_hdr->data_off >> 4) * 4;
+    if (unlikely(tcp_hdr_len < sizeof(struct rte_tcp_hdr))) {
+        MYLIB_LOG(LOG_LEVEL_WARNING, "TCP头部长度无效: %u", tcp_hdr_len);
+        return MYLIB_ERROR_INVALID;
+    }
+    
+    /* 提取源IP和端口 */
+    uint32_t src_ip = ntohl(ip_hdr->src_addr);
+    uint16_t src_port = ntohs(tcp_hdr->src_port);
+    uint16_t dst_port = ntohs(tcp_hdr->dst_port);
+    
+    MYLIB_LOG(LOG_LEVEL_DEBUG, "收到TCP数据包: 源IP=0x%08X, 源端口=%u, 目标端口=%u, 标志=0x%02X",
+             src_ip, src_port, dst_port, tcp_hdr->tcp_flags);
+    
+    /* 查找对应的TCP控制块 */
+    pthread_mutex_lock(&g_tcp_mutex);
+    
+    struct tcp_control_block *tcb = NULL;
+    struct tcp_control_block *iter = g_tcb_list;
+    
+    while (iter) {
+        if (iter->sock->local_port == dst_port) {
+            /* 对于监听socket，只检查本地端口 */
+            if (iter->state == TCP_STATE_LISTEN) {
+                tcb = iter;
+                break;
+            }
+            
+            /* 对于已建立连接的socket，检查远程IP和端口 */
+            if (iter->remote_ip == src_ip && iter->remote_port == src_port) {
+                tcb = iter;
+                break;
+            }
+        }
+        iter = iter->next;
+    }
+    
+    /* 如果没有找到匹配的TCB，可能是新连接或无效数据包 */
+    if (!tcb) {
+        /* 如果是SYN包，尝试查找监听socket */
+        if (tcp_hdr->tcp_flags & RTE_TCP_SYN_FLAG) {
+            iter = g_tcb_list;
+            while (iter) {
+                if (iter->state == TCP_STATE_LISTEN && iter->sock->local_port == dst_port) {
+                    tcb = iter;
+                    break;
+                }
+                iter = iter->next;
+            }
+        }
+        
+        /* 仍然没有找到，发送RST */
+        if (!tcb) {
+            pthread_mutex_unlock(&g_tcp_mutex);
+            
+            /* 只对非RST包回复RST */
+            if (!(tcp_hdr->tcp_flags & RTE_TCP_RST_FLAG)) {
+                /* 创建RST包 */
+                struct tcp_segment rst_seg;
+                memset(&rst_seg, 0, sizeof(rst_seg));
+                
+                /* 设置RST标志和序列号 */
+                rst_seg.flags = RTE_TCP_RST_FLAG;
+                if (tcp_hdr->tcp_flags & RTE_TCP_ACK_FLAG) {
+                    rst_seg.seq = ntohl(tcp_hdr->recv_ack);
+                } else {
+                    rst_seg.seq = 0;
+                    rst_seg.ack = ntohl(tcp_hdr->sent_seq) + 1;
+                    rst_seg.flags |= RTE_TCP_ACK_FLAG;
+                }
+                
+                /* 创建临时TCB用于发送RST */
+                struct mylib_socket temp_sock;
+                memset(&temp_sock, 0, sizeof(temp_sock));
+                temp_sock.local_port = dst_port;
+                
+                struct tcp_control_block temp_tcb;
+                memset(&temp_tcb, 0, sizeof(temp_tcb));
+                temp_tcb.sock = &temp_sock;
+                temp_tcb.remote_ip = src_ip;
+                temp_tcb.remote_port = src_port;
+                
+                /* 创建并发送RST包 */
+                struct rte_mbuf *rst_mbuf = tcp_create_packet(&temp_tcb, &rst_seg);
+                if (rst_mbuf) {
+                    rte_ring_mp_enqueue(g_out_ring, rst_mbuf);
+                    MYLIB_LOG(LOG_LEVEL_DEBUG, "发送RST响应无效连接");
+                }
+            }
+            
+            return MYLIB_ERROR_NOMEM;
+        }
+    }
+    
+    /* 提取TCP段数据 */
+    struct tcp_segment seg;
+    memset(&seg, 0, sizeof(seg));
+    
+    seg.seq = ntohl(tcp_hdr->sent_seq);
+    seg.ack = ntohl(tcp_hdr->recv_ack);
+    seg.flags = tcp_hdr->tcp_flags;
+    seg.window = ntohs(tcp_hdr->rx_win);
+    seg.src_ip = src_ip;
+    seg.src_port = src_port;
+    
+    /* 提取数据部分 */
+    uint16_t ip_total_len = ntohs(ip_hdr->total_length);
+    uint16_t ip_hdr_len = (ip_hdr->version_ihl & 0x0F) * 4;
+    uint16_t data_len = ip_total_len - ip_hdr_len - tcp_hdr_len;
+    
+    if (data_len > 0) {
+        uint8_t *data_ptr = (uint8_t *)tcp_hdr + tcp_hdr_len;
+        seg.data = data_ptr;
+        seg.length = data_len;
+    }
+    
+    /* 处理TCP段 */
+    tcp_input(tcb, &seg);
+    
+    pthread_mutex_unlock(&g_tcp_mutex);
     
     return MYLIB_SUCCESS;
 }
