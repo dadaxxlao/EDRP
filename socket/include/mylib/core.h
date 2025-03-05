@@ -1,3 +1,13 @@
+/**
+ * @file core.h
+ * @brief 核心功能头文件
+ *
+ * 将核心功能封装成库，提供给其他模块使用。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #ifndef MYLIB_CORE_H
 #define MYLIB_CORE_H
 
@@ -23,7 +33,9 @@ typedef enum {
     MYLIB_ERROR_TIMEOUT = -4,
     MYLIB_ERROR_BIND = -5,
     MYLIB_ERROR_SEND = -6,
-    MYLIB_ERROR_IO = -7
+    MYLIB_ERROR_IO = -7,
+    MYLIB_ERROR_INIT = -8,
+    MYLIB_ERROR_TIMER = -9
 } mylib_error_t;
 
 /* 配置选项 */
@@ -62,11 +74,11 @@ mylib_error_t mylib_bind(socket_handle_t sock, const struct sockaddr* addr, sock
 mylib_error_t mylib_listen(socket_handle_t sock, int backlog);
 mylib_error_t mylib_connect(socket_handle_t handle, const struct sockaddr* addr, socklen_t addrlen);
 socket_handle_t mylib_accept(socket_handle_t sock, struct sockaddr* addr, socklen_t* addrlen);
-ssize_t mylib_send(socket_handle_t sock, const void* buf, size_t len, int flags);
-ssize_t mylib_recv(socket_handle_t sock, void* buf, size_t len, int flags);
-ssize_t mylib_sendto(socket_handle_t sock, const void* buf, size_t len, int flags,
+mylib_error_t mylib_send(socket_handle_t sock, const void* buf, size_t len, int flags);
+mylib_error_t mylib_recv(socket_handle_t sock, void* buf, size_t len, int flags);
+mylib_error_t mylib_sendto(socket_handle_t sock, const void* buf, size_t len, int flags,
                      const struct sockaddr* dest_addr, socklen_t addrlen);
-ssize_t mylib_recvfrom(socket_handle_t sock, void* buf, size_t len, int flags,
+mylib_error_t mylib_recvfrom(socket_handle_t sock, void* buf, size_t len, int flags,
                        struct sockaddr* src_addr, socklen_t* addrlen);
 mylib_error_t mylib_close(socket_handle_t sock);
 

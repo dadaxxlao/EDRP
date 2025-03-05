@@ -1,3 +1,13 @@
+/**
+ * @file core.c
+ * @brief 核心功能实现
+ *
+ * 实现核心功能，包括初始化、清理、socket创建、关闭等。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #include <string.h>
 #include <errno.h>
 #include <pthread.h>
@@ -222,7 +232,7 @@ mylib_error_t mylib_close(socket_handle_t handle) {
     }
 
     /* 根据协议类型处理 */
-    if (sock->protocol == MYLIB_PROTO_UDP) {
+    if (sock->protocol == IPPROTO_UDP) {
         /* 处理UDP socket */
         pthread_mutex_lock(&g_udp_mutex);
         struct udp_control_block *ucb = udp_find_ucb(sock->local_ip, sock->local_port);
@@ -230,7 +240,7 @@ mylib_error_t mylib_close(socket_handle_t handle) {
             udp_destroy_ucb(ucb);
         }
         pthread_mutex_unlock(&g_udp_mutex);
-    } else if (sock->protocol == MYLIB_PROTO_TCP) {
+    } else if (sock->protocol == IPPROTO_TCP) {
         /* 处理TCP socket */
         pthread_mutex_lock(&g_tcp_mutex);
         struct tcp_control_block *tcb = tcp_find_tcb(sock->local_ip, sock->local_port);

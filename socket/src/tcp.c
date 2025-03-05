@@ -591,14 +591,14 @@ void tcp_input(struct tcp_control_block *tcb, struct tcp_segment *seg) {
         /* 对于连接请求的RST，通知用户 */
         if (tcb->state == TCP_STATE_SYN_SENT) {
             /* 连接被拒绝 */
-            tcb->sock->error = MYLIB_ERROR_CONNECTION;
+            /* 设置TCP状态，让上层应用可以检测到连接失败 */
+            tcb->state = TCP_STATE_CLOSED;
+            
+            /* 通知等待连接的线程 */
             pthread_mutex_lock(&tcb->sock->mutex);
             pthread_cond_signal(&tcb->sock->cond);
             pthread_mutex_unlock(&tcb->sock->mutex);
         }
-        
-        /* 设置状态为CLOSED */
-        tcb->state = TCP_STATE_CLOSED;
         
         /* 停止所有计时器 */
         for (int i = 0; i < TCP_TIMER_MAX; i++) {
@@ -1150,14 +1150,14 @@ mylib_error_t tcp_connect(struct tcp_control_block *tcb, uint32_t dst_ip, uint16
     struct rte_mbuf *mbuf = tcp_create_packet(tcb, &syn);
     if (!mbuf) {
         MYLIB_LOG(LOG_LEVEL_ERROR, "创建SYN包失败");
-        return MYLIB_ERROR_PKT_CREATE;
+        return MYLIB_ERROR_NOMEM;
     }
     
     /* 入队等待发送 */
     if (rte_ring_mp_enqueue(g_out_ring, mbuf) != 0) {
         MYLIB_LOG(LOG_LEVEL_ERROR, "SYN包入队失败");
         rte_pktmbuf_free(mbuf);
-        return MYLIB_ERROR_FULL;
+        return MYLIB_ERROR_NOMEM;
     }
     
     /* 增加序列号 */

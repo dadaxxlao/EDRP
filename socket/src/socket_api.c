@@ -1,3 +1,13 @@
+/**
+ * @file socket_api.c
+ * @brief socket API实现
+ *
+ * 实现socket API的核心功能，包括bind、connect、listen、accept、send、recv等。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #include <rte_malloc.h>
 #include <string.h>
 #include <errno.h>
@@ -90,13 +100,13 @@ mylib_error_t mylib_bind(socket_handle_t handle, const struct sockaddr* addr, so
     return MYLIB_SUCCESS;
 }
 
-ssize_t mylib_sendto(socket_handle_t handle, const void* buf, size_t len, int flags,
+mylib_error_t mylib_sendto(socket_handle_t handle, const void* buf, size_t len, int flags,
                      const struct sockaddr* dest_addr, socklen_t addrlen) {
     struct mylib_socket *sock = (struct mylib_socket *)handle;
     
     if (!sock || !buf || !dest_addr || addrlen < sizeof(struct sockaddr_in)) {
         errno = EINVAL;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     const struct sockaddr_in *daddr = (const struct sockaddr_in*)dest_addr;
@@ -104,20 +114,20 @@ ssize_t mylib_sendto(socket_handle_t handle, const void* buf, size_t len, int fl
     /* 检查地址族 */
     if (daddr->sin_family != AF_INET) {
         errno = EAFNOSUPPORT;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 只支持UDP */
     if (sock->protocol != IPPROTO_UDP) {
         errno = EPROTOTYPE;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 获取UDP控制块 */
     struct udp_control_block *ucb = udp_find_ucb(sock->local_ip, sock->local_port);
     if (!ucb) {
         errno = ENOTCONN;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 设置目标地址 */
@@ -128,46 +138,46 @@ ssize_t mylib_sendto(socket_handle_t handle, const void* buf, size_t len, int fl
     void *data = rte_malloc("udp_data", len, 0);
     if (!data) {
         errno = ENOMEM;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
     rte_memcpy(data, buf, len);
 
     if (rte_ring_mp_enqueue(sock->send_buf, data) < 0) {
         rte_free(data);
         errno = EAGAIN;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 触发发送 */
     mylib_error_t ret = udp_output(ucb);
     if (ret != MYLIB_SUCCESS) {
         errno = EAGAIN;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     return len;
 }
 
-ssize_t mylib_recvfrom(socket_handle_t handle, void* buf, size_t len, int flags,
+mylib_error_t mylib_recvfrom(socket_handle_t handle, void* buf, size_t len, int flags,
                        struct sockaddr* src_addr, socklen_t* addrlen) {
     struct mylib_socket *sock = (struct mylib_socket *)handle;
     
     if (!sock || !buf) {
         errno = EINVAL;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 只支持UDP */
     if (sock->protocol != IPPROTO_UDP) {
         errno = EPROTOTYPE;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 获取UDP控制块 */
     struct udp_control_block *ucb = udp_find_ucb(sock->local_ip, sock->local_port);
     if (!ucb) {
         errno = ENOTCONN;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 从接收缓冲区获取数据 */
@@ -175,7 +185,7 @@ ssize_t mylib_recvfrom(socket_handle_t handle, void* buf, size_t len, int flags,
     if (rte_ring_mc_dequeue(sock->recv_buf, &data) < 0) {
         if (flags & MSG_DONTWAIT) {
             errno = EAGAIN;
-            return -1;
+            return MYLIB_ERROR_INVALID;
         }
 
         /* 阻塞等待数据 */
@@ -277,7 +287,7 @@ socket_handle_t mylib_accept(socket_handle_t handle, struct sockaddr* addr, sock
     memset(new_sock, 0, sizeof(struct mylib_socket));
     new_sock->protocol = IPPROTO_TCP;
     new_sock->local_ip = sock->local_ip;
-    new_sock->local_port = new_tcb->remote_port;
+    new_sock->local_port = sock->local_port;
     
     /* 分配文件描述符 */
     new_sock->fd = allocate_fd();
@@ -322,70 +332,70 @@ socket_handle_t mylib_accept(socket_handle_t handle, struct sockaddr* addr, sock
     return (socket_handle_t)new_sock;
 }
 
-ssize_t mylib_send(socket_handle_t handle, const void* buf, size_t len, int flags) {
+mylib_error_t mylib_send(socket_handle_t handle, const void* buf, size_t len, int flags) {
     struct mylib_socket *sock = (struct mylib_socket *)handle;
     
     if (!sock || !buf) {
         errno = EINVAL;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 只支持TCP */
     if (sock->protocol != IPPROTO_TCP) {
         errno = EPROTOTYPE;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 获取TCP控制块 */
     struct tcp_control_block *tcb = tcp_find_tcb(sock->local_ip, sock->local_port);
     if (!tcb || tcb->state != TCP_STATE_ESTABLISHED) {
         errno = ENOTCONN;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 将数据放入发送缓冲区 */
     void *data = rte_malloc("tcp_data", len, 0);
     if (!data) {
         errno = ENOMEM;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
     rte_memcpy(data, buf, len);
 
     if (rte_ring_mp_enqueue(sock->send_buf, data) < 0) {
         rte_free(data);
         errno = EAGAIN;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 触发发送 */
     mylib_error_t ret = tcp_output(tcb);
     if (ret != MYLIB_SUCCESS) {
         errno = EAGAIN;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     return len;
 }
 
-ssize_t mylib_recv(socket_handle_t handle, void* buf, size_t len, int flags) {
+mylib_error_t mylib_recv(socket_handle_t handle, void* buf, size_t len, int flags) {
     struct mylib_socket *sock = (struct mylib_socket *)handle;
     
     if (!sock || !buf) {
         errno = EINVAL;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 只支持TCP */
     if (sock->protocol != IPPROTO_TCP) {
         errno = EPROTOTYPE;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 获取TCP控制块 */
     struct tcp_control_block *tcb = tcp_find_tcb(sock->local_ip, sock->local_port);
     if (!tcb || tcb->state != TCP_STATE_ESTABLISHED) {
         errno = ENOTCONN;
-        return -1;
+        return MYLIB_ERROR_INVALID;
     }
 
     /* 从接收缓冲区获取数据 */
@@ -393,7 +403,7 @@ ssize_t mylib_recv(socket_handle_t handle, void* buf, size_t len, int flags) {
     if (rte_ring_mc_dequeue(sock->recv_buf, &data) < 0) {
         if (flags & MSG_DONTWAIT) {
             errno = EAGAIN;
-            return -1;
+            return MYLIB_ERROR_INVALID;
         }
 
         /* 阻塞等待数据 */
@@ -423,7 +433,7 @@ mylib_error_t mylib_connect(socket_handle_t handle, const struct sockaddr* addr,
     }
     
     /* 检查协议类型 */
-    if (sock->protocol != MYLIB_PROTO_TCP) {
+    if (sock->protocol != IPPROTO_TCP) {
         MYLIB_LOG(LOG_LEVEL_ERROR, "Socket protocol is not TCP");
         return MYLIB_ERROR_INVALID;
     }
@@ -476,7 +486,7 @@ mylib_error_t mylib_connect(socket_handle_t handle, const struct sockaddr* addr,
         
         /* 检查连接是否成功 */
         if (tcb->state != TCP_STATE_ESTABLISHED) {
-            ret = MYLIB_ERROR_CONN;
+            ret = MYLIB_ERROR_NOMEM;
         }
         
         pthread_mutex_unlock(&sock->mutex);

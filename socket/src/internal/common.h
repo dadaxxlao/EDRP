@@ -1,3 +1,13 @@
+/**
+ * @file common.h
+ * @brief 公共头文件
+ *
+ * 定义了内部使用的数据结构和函数声明。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #ifndef MYLIB_INTERNAL_COMMON_H
 #define MYLIB_INTERNAL_COMMON_H
 

@@ -1,3 +1,13 @@
+/**
+ * @file rings.c
+ * @brief 环形缓冲区实现
+ *
+ * 实现环形缓冲区的创建和管理。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #include <rte_ring.h>
 #include <rte_malloc.h>
 #include "internal/common.h"

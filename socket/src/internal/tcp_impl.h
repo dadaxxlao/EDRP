@@ -14,6 +14,7 @@
 #define MYLIB_INTERNAL_TCP_IMPL_H
 
 #include <rte_tcp.h>
+#include <rte_timer.h>
 #include "common.h"
 #include "arp_impl.h" /* 用于获取MAC地址，填充TCP包头 */
 

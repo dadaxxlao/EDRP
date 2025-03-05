@@ -1,3 +1,13 @@
+/**
+ * @file icmp_impl.h
+ * @brief ICMP协议实现
+ *
+ * 实现ICMP协议的核心功能，包括校验和计算、ARP表更新、Echo Request处理等。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #ifndef _ICMP_IMPL_H_
 #define _ICMP_IMPL_H_
 

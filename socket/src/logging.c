@@ -1,3 +1,13 @@
+/**
+ * @file logging.c
+ * @brief 日志实现
+ *
+ * 实现日志功能，包括初始化、清理、设置日志级别等。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #include <syslog.h>
 #include <pthread.h>
 #include "internal/logging.h"

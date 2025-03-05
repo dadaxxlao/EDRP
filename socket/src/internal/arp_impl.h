@@ -1,3 +1,13 @@
+/**
+ * @file arp_impl.h
+ * @brief ARP协议实现
+ *
+ * 实现ARP协议的核心功能，包括ARP表管理、ARP请求队列管理、ARP解析回调等。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #ifndef MYLIB_INTERNAL_ARP_IMPL_H
 #define MYLIB_INTERNAL_ARP_IMPL_H
 

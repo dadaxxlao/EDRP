@@ -1,3 +1,13 @@
+/**
+ * @file fd_manager.c
+ * @brief 文件描述符管理
+ *
+ * 实现文件描述符的分配和释放。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #include <rte_malloc.h>
 #include <pthread.h>
 #include "internal/common.h"

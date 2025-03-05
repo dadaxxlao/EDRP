@@ -1,3 +1,13 @@
+/**
+ * @file dpdk_init.h
+ * @brief DPDK初始化
+ *
+ * 实现DPDK的初始化功能，包括EAL初始化、内存池创建、端口配置等。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #ifndef MYLIB_DPDK_INIT_H
 #define MYLIB_DPDK_INIT_H
 

@@ -1,3 +1,13 @@
+/**
+ * @file udp.c
+ * @brief UDP协议实现
+ *
+ * 实现UDP协议的核心功能，包括数据包的创建、发送和接收。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #include <rte_udp.h>
 #include <rte_malloc.h>
 #include <string.h>

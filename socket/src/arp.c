@@ -1,3 +1,13 @@
+/**
+ * @file arp.c
+ * @brief ARP协议实现
+ *
+ * 实现ARP协议的核心功能，包括ARP表管理、ARP请求处理、ARP应答处理等。
+ * 基于DPDK实现高性能网络通信。
+ *
+ * @author 冯昊阳
+ * @date 2025年2月18日
+ */
 #include <rte_arp.h>
 #include <rte_malloc.h>
 #include <string.h>
